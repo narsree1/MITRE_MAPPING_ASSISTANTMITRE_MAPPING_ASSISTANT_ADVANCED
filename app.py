@@ -747,7 +747,7 @@ def process_mappings(df, _model, mitre_techniques, mitre_embeddings, library_df,
                 if '-' in technique:
                     tech_id = technique.split('-')[0].strip()
                     techniques_count[tech_id] = techniques_count.get(tech_id, 0) + 1
-
+ 
     # Add results to dataframe
     df['Mapped MITRE Tactic(s)'] = tactics
     df['Mapped MITRE Technique(s)'] = techniques
@@ -1146,7 +1146,7 @@ elif st.session_state.page == "analytics":
         else:
             st.info("No mapping source data available for visualization.")
         
-        # Coverage by Tactic - Doughnut Chart
+        # Coverage by Tactic - Doughnut Chart with better color scheme
         st.markdown("### Coverage by Tactic")
         
         # Create data for tactic coverage
@@ -1167,14 +1167,14 @@ elif st.session_state.page == "analytics":
         }).sort_values('Use Cases', ascending=False)
         
         if not tactic_df.empty:
-            # Create doughnut chart for tactic coverage - WITH FIXED LEGEND POSITION
+            # Create doughnut chart for tactic coverage with better colors
             fig_tactic = go.Figure(data=[go.Pie(
                 labels=tactic_df['Tactic'],
                 values=tactic_df['Use Cases'],
                 hole=.5,
                 textinfo='label+percent',
                 insidetextorientation='radial',
-                marker=dict(colors=px.colors.sequential.Blues)
+                marker=dict(colors=px.colors.qualitative.Dark24)  # Using Dark24 for better contrast
             )])
             
             fig_tactic.update_layout(
@@ -1186,7 +1186,7 @@ elif st.session_state.page == "analytics":
         else:
             st.info("No tactic data available for visualization.")
         
-        # Coverage by Technique - Doughnut Chart
+        # Coverage by Technique - Doughnut Chart with better naming
         st.markdown("### Coverage by Technique")
         
         if techniques_count:
@@ -1194,25 +1194,37 @@ elif st.session_state.page == "analytics":
             technique_ids = list(techniques_count.keys())
             technique_counts = list(techniques_count.values())
             
-            # Get technique names
+            # Get technique names - with improved extraction to fix "Multi:unknown" issue
             technique_names = []
             for tech_id in technique_ids:
-                tech_name = next((t['name'] for t in mitre_techniques if t['id'] == tech_id), 'Unknown')
-                technique_names.append(f"{tech_id}: {tech_name}")
+                # Find the full technique information in the processed data
+                full_tech_info = None
+                for _, row in df.iterrows():
+                    technique = row.get('Mapped MITRE Technique(s)', '')
+                    if not pd.isna(technique) and tech_id in technique:
+                        full_tech_info = technique
+                        break
+                
+                # If found in the data, use the full name; otherwise, look for it in mitre_techniques
+                if full_tech_info:
+                    technique_names.append(full_tech_info)
+                else:
+                    tech_name = next((t['name'] for t in mitre_techniques if t['id'] == tech_id), tech_id)
+                    technique_names.append(f"{tech_id} - {tech_name}")
             
             technique_df = pd.DataFrame({
                 'Technique': technique_names,
                 'Count': technique_counts
             }).sort_values('Count', ascending=False).head(10)
             
-            # Create doughnut chart for technique coverage - WITH FIXED LEGEND POSITION
+            # Create doughnut chart for technique coverage with better colors
             fig_tech = go.Figure(data=[go.Pie(
                 labels=technique_df['Technique'],
                 values=technique_df['Count'],
                 hole=.5,
                 textinfo='label+percent',
                 insidetextorientation='radial',
-                marker=dict(colors=px.colors.sequential.Viridis)
+                marker=dict(colors=px.colors.qualitative.Bold)  # Using Bold color scheme for better contrast
             )])
             
             fig_tech.update_layout(
@@ -1236,7 +1248,7 @@ elif st.session_state.page == "analytics":
 elif st.session_state.page == "suggestions":
     render_suggestions_page()
 
-# Export page
+# Export page - Removed "Export New Cases for Library" section
 elif st.session_state.page == "export":
     st.markdown("# 💾 Export Navigator Layer")
     
@@ -1259,38 +1271,6 @@ elif st.session_state.page == "export":
             mime="application/json",
             key="download_nav"
         )
-        
-        # Export library-compatible format for new entries
-        st.markdown("### Export New Cases for Library")
-        
-        st.markdown("""
-        You can export the newly mapped use cases in a format compatible with your library.
-        This will only include cases that weren't found in the library and were mapped using the model.
-        """)
-        
-        if 'Match Source' in df.columns:
-            try:
-                # Safe filtering for model-mapped entries
-                model_mapped_df = df[df['Match Source'].fillna('Unknown').astype(str).str.contains('Model', case=False, na=False)]
-                
-                if not model_mapped_df.empty:
-                    # Format for library
-                    library_columns = ['Use Case Name', 'Description', 'Log Source', 'Mapped MITRE Tactic(s)', 'Mapped MITRE Technique(s)', 'Reference Resource(s)']
-                    available_cols = [col for col in library_columns if col in model_mapped_df.columns]
-                    export_df = model_mapped_df[available_cols]
-                    
-                    st.download_button(
-                        label="Download New Cases for Library",
-                        data=export_df.to_csv(index=False).encode('utf-8'),
-                        file_name="new_library_entries.csv",
-                        mime="text/csv",
-                        key="download_library"
-                    )
-                else:
-                    st.info("All use cases were found in the library or couldn't be mapped. No new entries to export.")
-            except Exception as e:
-                st.error(f"Error preparing export: {str(e)}")
-                st.info("Try using the Results page to download all data instead.")
         
         st.markdown("### How to Use in MITRE ATT&CK Navigator")
         
