@@ -1,0 +1,9 @@
+streamlit>=1.22.0,<2.0.0
+pandas
+requests
+sentence-transformers
+torch>=2.2.0
+numpy
+plotly
+streamlit-option-menu
+streamlit-lottie
