@@ -747,7 +747,7 @@ def process_mappings(df, _model, mitre_techniques, mitre_embeddings, library_df,
                 if '-' in technique:
                     tech_id = technique.split('-')[0].strip()
                     techniques_count[tech_id] = techniques_count.get(tech_id, 0) + 1
-    
+
     # Add results to dataframe
     df['Mapped MITRE Tactic(s)'] = tactics
     df['Mapped MITRE Technique(s)'] = techniques
@@ -876,6 +876,7 @@ if library_df is not None:
 
 # Store model in session state for use in suggestions
 st.session_state.model = model
+
 # Home page
 if st.session_state.page == "home":
     st.markdown("# 🛡️ MITRE ATT&CK Mapping Tool")
@@ -1136,7 +1137,9 @@ elif st.session_state.page == "analytics":
                     color_discrete_sequence=px.colors.qualitative.Set3
                 )
                 
-                fig_source.update_layout(legend=dict(orientation="h", yanchor="bottom", y=-0.2))
+                fig_source.update_layout(
+                    legend=dict(orientation="h", yanchor="bottom", y=-0.2)
+                )
                 st.plotly_chart(fig_source, use_container_width=True)
             else:
                 st.info("No mapping source data available for visualization.")
@@ -1164,7 +1167,7 @@ elif st.session_state.page == "analytics":
         }).sort_values('Use Cases', ascending=False)
         
         if not tactic_df.empty:
-            # Create doughnut chart for tactic coverage
+            # Create doughnut chart for tactic coverage - WITH FIXED LEGEND POSITION
             fig_tactic = go.Figure(data=[go.Pie(
                 labels=tactic_df['Tactic'],
                 values=tactic_df['Use Cases'],
@@ -1176,7 +1179,7 @@ elif st.session_state.page == "analytics":
             
             fig_tactic.update_layout(
                 title="Security Use Cases by MITRE Tactic",
-                legend=dict(orientation="h", yanchor="bottom", y=-0.2)
+                showlegend=False  # Remove legend to prevent overlap
             )
             
             st.plotly_chart(fig_tactic, use_container_width=True)
@@ -1202,7 +1205,7 @@ elif st.session_state.page == "analytics":
                 'Count': technique_counts
             }).sort_values('Count', ascending=False).head(10)
             
-            # Create doughnut chart for technique coverage
+            # Create doughnut chart for technique coverage - WITH FIXED LEGEND POSITION
             fig_tech = go.Figure(data=[go.Pie(
                 labels=technique_df['Technique'],
                 values=technique_df['Count'],
@@ -1214,7 +1217,7 @@ elif st.session_state.page == "analytics":
             
             fig_tech.update_layout(
                 title="Top 10 MITRE Techniques in Security Use Cases",
-                legend=dict(orientation="h", yanchor="bottom", y=-0.2)
+                showlegend=False  # Remove legend to prevent overlap
             )
             
             st.plotly_chart(fig_tech, use_container_width=True)
