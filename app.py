@@ -72,7 +72,7 @@ def batch_similarity_search(query_embeddings, reference_embeddings):
     
     return best_scores.tolist(), best_indices.tolist()
 
-# Custom CSS for modern look (no changes needed here)
+# Custom CSS for modern look
 st.markdown("""
 <style>
     /* Modern Color Scheme */
@@ -204,6 +204,175 @@ if 'library_embeddings' not in st.session_state:
     st.session_state.library_embeddings = None
 if 'mitre_embeddings' not in st.session_state:
     st.session_state.mitre_embeddings = None
+if '_uploaded_file' not in st.session_state:
+    st.session_state._uploaded_file = None
+
+# Function to get suggested use cases based on log sources
+def get_suggested_use_cases(uploaded_df, library_df):
+    """
+    Find use cases from the library that match log sources in the uploaded data
+    but aren't already present in the uploaded data.
+    
+    Returns a DataFrame with suggested use cases.
+    """
+    if uploaded_df is None or library_df is None or library_df.empty:
+        return pd.DataFrame()
+    
+    # Step 1: Extract unique log sources from uploaded data
+    user_log_sources = set()
+    if 'Log Source' in uploaded_df.columns:
+        # Handle multi-value log sources (comma separated)
+        for log_source in uploaded_df['Log Source'].fillna('').astype(str):
+            if log_source and log_source != 'N/A':
+                for source in log_source.split(','):
+                    user_log_sources.add(source.strip())
+    
+    # Filter out empty or N/A sources
+    user_log_sources = {src for src in user_log_sources if src and src != 'N/A'}
+    
+    if not user_log_sources:
+        return pd.DataFrame()  # No valid log sources found
+    
+    # Step 2: Find matching use cases in the library based on log sources
+    matching_use_cases = []
+    
+    # Get set of existing use case descriptions for deduplication
+    existing_descriptions = set()
+    if 'Description' in uploaded_df.columns:
+        existing_descriptions = set(uploaded_df['Description'].fillna('').astype(str).str.lower())
+    
+    # For each library entry, check if its log source matches any user log source
+    for _, lib_row in library_df.iterrows():
+        lib_log_source = str(lib_row.get('Log Source', ''))
+        lib_description = str(lib_row.get('Description', '')).lower()
+        
+        # Check if any user log source matches this library entry's log source
+        if any(user_source.lower() in lib_log_source.lower() for user_source in user_log_sources):
+            # Check if this use case is already in the user's data (by description)
+            if lib_description not in existing_descriptions:
+                matching_use_cases.append(lib_row)
+    
+    # If we have matches, convert to DataFrame
+    if matching_use_cases:
+        suggestions_df = pd.DataFrame(matching_use_cases)
+        
+        # Add a relevance score column based on exact log source match
+        suggestions_df['Relevance'] = suggestions_df.apply(
+            lambda row: sum(1 for src in user_log_sources 
+                          if src.lower() in str(row.get('Log Source', '')).lower()),
+            axis=1
+        )
+        
+        # Sort by relevance (highest first)
+        suggestions_df = suggestions_df.sort_values('Relevance', ascending=False)
+        
+        # Include only relevant columns and rename for clarity
+        needed_columns = ['Use Case Name', 'Description', 'Log Source', 
+                          'Mapped MITRE Tactic(s)', 'Mapped MITRE Technique(s)',
+                          'Reference Resource(s)', 'Search', 'Relevance']
+        
+        # Filter columns that exist
+        actual_columns = [col for col in needed_columns if col in suggestions_df.columns]
+        return suggestions_df[actual_columns]
+    
+    return pd.DataFrame()  # No suggestions found
+
+# Render suggestions page
+def render_suggestions_page():
+    st.markdown("# 🔍 Suggested Use Cases")
+    
+    if st.session_state.file_uploaded:
+        if st.session_state.library_data is not None and not st.session_state.library_data.empty:
+            
+            uploaded_df = None
+            if 'processed_data' in st.session_state and st.session_state.processed_data is not None:
+                uploaded_df = st.session_state.processed_data
+            else:
+                # Try to get the original uploaded data if processing hasn't happened yet
+                try:
+                    uploaded_file = st.session_state.get('_uploaded_file')
+                    if uploaded_file:
+                        uploaded_df = pd.read_csv(uploaded_file)
+                except:
+                    pass
+            
+            if uploaded_df is None:
+                st.info("Please upload your data file on the Home page first.")
+                return
+                
+            # Get suggestions based on log sources
+            with st.spinner("Finding suggested use cases based on log sources..."):
+                log_source_suggestions = get_suggested_use_cases(
+                    uploaded_df, 
+                    st.session_state.library_data
+                )
+            
+            # Display suggestions
+            if not log_source_suggestions.empty:
+                st.success(f"Found {len(log_source_suggestions)} suggested use cases based on your log sources!")
+                
+                # Format the dataframe for display
+                display_df = log_source_suggestions.copy()
+                if 'Relevance' in display_df.columns:
+                    display_df['Relevance Score'] = display_df['Relevance'].apply(lambda x: f"{x:.0f} ⭐")
+                    display_df = display_df.drop('Relevance', axis=1)
+                
+                st.dataframe(display_df, use_container_width=True)
+                
+                # Add a detailed view for each suggestion
+                st.markdown("### Detailed View")
+                selected_suggestion = st.selectbox(
+                    "Select a use case to view details",
+                    options=display_df['Use Case Name'].tolist(),
+                    index=0
+                )
+                
+                if selected_suggestion:
+                    selected_row = display_df[display_df['Use Case Name'] == selected_suggestion].iloc[0]
+                    
+                    # Create columns for the detailed view
+                    col1, col2 = st.columns([1, 1])
+                    
+                    with col1:
+                        st.markdown("#### Use Case Details")
+                        st.markdown(f"**Name:** {selected_row.get('Use Case Name', 'N/A')}")
+                        st.markdown(f"**Log Source:** {selected_row.get('Log Source', 'N/A')}")
+                        st.markdown(f"**Description:**")
+                        st.markdown(f"{selected_row.get('Description', 'No description available')}")
+                    
+                    with col2:
+                        st.markdown("#### MITRE ATT&CK Mapping")
+                        st.markdown(f"**Tactic(s):** {selected_row.get('Mapped MITRE Tactic(s)', 'N/A')}")
+                        st.markdown(f"**Technique(s):** {selected_row.get('Mapped MITRE Technique(s)', 'N/A')}")
+                        
+                        # Display reference resources if available
+                        if 'Reference Resource(s)' in selected_row and selected_row['Reference Resource(s)'] != 'N/A':
+                            st.markdown("#### Reference Resources")
+                            st.markdown(f"{selected_row['Reference Resource(s)']}")
+                    
+                    # Display search query in a separate section
+                    if 'Search' in selected_row and selected_row['Search'] != 'N/A' and not pd.isna(selected_row['Search']):
+                        st.markdown("### Search Query")
+                        st.code(selected_row['Search'], language="sql")
+                
+                # Download option
+                st.download_button(
+                    "Download Suggested Use Cases as CSV",
+                    log_source_suggestions.to_csv(index=False).encode('utf-8'),
+                    "suggested_use_cases.csv",
+                    "text/csv"
+                )
+            else:
+                st.info("No additional use cases found based on your log sources.")
+        else:
+            st.warning("Library data is not available. Cannot provide suggestions without a reference library.")
+    else:
+        st.info("Please upload your security use cases CSV file on the Home page first.")
+        
+        # Add a button to navigate back to home
+        if st.button("Go to Home"):
+            st.session_state.page = "home"
+            st.experimental_rerun()
 
 # Load embedding model with error handling
 @st.cache_resource
@@ -290,7 +459,7 @@ def load_library_data_with_embeddings(_model):
             # Create an empty DataFrame with required columns
             library_df = pd.DataFrame(columns=['Use Case Name', 'Description', 'Log Source', 
                                                'Mapped MITRE Tactic(s)', 'Mapped MITRE Technique(s)', 
-                                               'Reference Resource(s)'])
+                                               'Reference Resource(s)', 'Search'])
         
         if library_df.empty:
             return None, None
@@ -664,8 +833,8 @@ with st.sidebar:
     
     selected = option_menu(
         "Navigation",
-        ["Home", "Results", "Analytics", "Export"],
-        icons=['house', 'table', 'graph-up', 'box-arrow-down'],
+        ["Home", "Results", "Analytics", "Suggestions", "Export"],
+        icons=['house', 'table', 'graph-up', 'search', 'box-arrow-down'],
         menu_icon="list",
         default_index=0,
     )
@@ -679,15 +848,17 @@ with st.sidebar:
     
     1. Library matching for known use cases
     2. Natural language processing for new use cases
+    3. Suggestions for additional use cases based on your log sources
     
     - Upload a CSV with security use cases
     - Get automatic MITRE ATT&CK mappings
+    - View suggested additional use cases
     - Visualize your coverage
     - Export for MITRE Navigator
     """)
     
     st.markdown("---")
-    st.markdown("© 2025 | v1.3.2 (Simplified)")
+    st.markdown("© 2025 | v1.4.0 (Enhanced)")
 
 # Load the ML model and MITRE data
 model = load_model()
@@ -703,6 +874,8 @@ if library_df is not None:
     st.session_state.library_data = library_df
     st.session_state.library_embeddings = library_embeddings
 
+# Store model in session state for use in suggestions
+st.session_state.model = model
 # Home page
 if st.session_state.page == "home":
     st.markdown("# 🛡️ MITRE ATT&CK Mapping Tool")
@@ -726,6 +899,9 @@ if st.session_state.page == "home":
             try:
                 df = pd.read_csv(uploaded_file)
                 
+                # Store the uploaded file in session state for later use in suggestions
+                st.session_state._uploaded_file = uploaded_file
+                
                 # Check for required columns
                 required_cols = ['Use Case Name', 'Description', 'Log Source']
                 if not all(col in df.columns for col in required_cols):
@@ -745,6 +921,7 @@ if st.session_state.page == "home":
                     3. If found in library, it uses the **pre-mapped** MITRE data
                     4. If not found, it **analyzes** the use case using NLP and maps it
                     5. **View** mapped results, analytics, and export options
+                    6. **Discover** additional relevant use cases based on your log sources
                     """)
                     
                     # Show preview of the uploaded data
@@ -781,11 +958,17 @@ if st.session_state.page == "home":
                             progress_bar.progress(100)
                             
                             st.success(f"Mapping complete in {elapsed_time:.2f} seconds! Navigate to Results to view the data.")
+                            
+                            # Add a suggestion to check the new Suggestions page
+                            st.info("Don't forget to check the Suggestions page for additional use cases based on your log sources!")
+                            
+                            # Add a button to go directly to suggestions
+                            if st.button("View Suggested Use Cases"):
+                                st.session_state.page = "suggestions"
+                                st.experimental_rerun()
             except Exception as e:
                 st.error(f"Error processing file: {str(e)}")
         
-        # Optimized Performance and Model Details sections removed as requested
-    
     with col2:
         st.markdown("### How It Works")
         
@@ -804,6 +987,7 @@ if st.session_state.page == "home":
             3. If found in library, it uses the **pre-mapped** MITRE data
             4. If not found, it **analyzes** the use case using NLP and maps it
             5. **View** mapped results, analytics, and export options
+            6. **Discover** additional relevant use cases based on your log sources
             """)
 
 # Results page
@@ -1044,6 +1228,10 @@ elif st.session_state.page == "analytics":
         if st.button("Go to Home"):
             st.session_state.page = "home"
             st.experimental_rerun()
+
+# Suggestions page
+elif st.session_state.page == "suggestions":
+    render_suggestions_page()
 
 # Export page
 elif st.session_state.page == "export":
