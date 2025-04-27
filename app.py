@@ -743,6 +743,7 @@ def process_mappings(df, _model, mitre_techniques, mitre_embeddings, library_df,
                 match_sources[idx] = "Model mapping"
                 match_scores[idx] = 0  # No library match score
                 
+                # Count
                 # Count techniques
                 if '-' in technique:
                     tech_id = technique.split('-')[0].strip()
@@ -1172,14 +1173,15 @@ elif st.session_state.page == "analytics":
                 labels=tactic_df['Tactic'],
                 values=tactic_df['Use Cases'],
                 hole=.5,
+                textposition='outside',  # Modified: This ensures all labels are outside
                 textinfo='label+percent',
-                insidetextorientation='radial',
                 marker=dict(colors=px.colors.qualitative.Dark24)  # Using Dark24 for better contrast
             )])
             
             fig_tactic.update_layout(
                 title="Security Use Cases by MITRE Tactic",
-                showlegend=False  # Remove legend to prevent overlap
+                showlegend=False,  # Remove legend to prevent overlap
+                margin=dict(t=50, b=50, l=100, r=100)  # Added: Margin for external labels
             )
             
             st.plotly_chart(fig_tactic, use_container_width=True)
@@ -1222,14 +1224,15 @@ elif st.session_state.page == "analytics":
                 labels=technique_df['Technique'],
                 values=technique_df['Count'],
                 hole=.5,
+                textposition='outside',  # Modified: This ensures all labels are outside
                 textinfo='label+percent',
-                insidetextorientation='radial',
                 marker=dict(colors=px.colors.qualitative.Bold)  # Using Bold color scheme for better contrast
             )])
             
             fig_tech.update_layout(
                 title="Top 10 MITRE Techniques in Security Use Cases",
-                showlegend=False  # Remove legend to prevent overlap
+                showlegend=False,  # Remove legend to prevent overlap
+                margin=dict(t=50, b=50, l=100, r=100)  # Added: Margin for external labels
             )
             
             st.plotly_chart(fig_tech, use_container_width=True)
