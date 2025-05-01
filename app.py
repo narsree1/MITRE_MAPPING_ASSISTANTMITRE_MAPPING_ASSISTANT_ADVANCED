@@ -207,6 +207,31 @@ if 'mitre_embeddings' not in st.session_state:
 if '_uploaded_file' not in st.session_state:
     st.session_state._uploaded_file = None
 
+# Helper functions for consistent formatting
+def capitalize_tactic(tactic):
+    """Capitalize tactic name and ensure consistent format"""
+    if not tactic or tactic == 'N/A':
+        return tactic
+        
+    # Handle comma-separated tactics
+    if ',' in tactic:
+        return ', '.join([capitalize_tactic(t.strip()) for t in tactic.split(',')])
+        
+    # Capitalize first letter
+    return tactic[0].upper() + tactic[1:] if len(tactic) > 0 else tactic
+
+def extract_technique_name(technique):
+    """Extract just the technique name from the format 'ID - Name'"""
+    if not technique or technique == 'N/A':
+        return technique
+        
+    # If in the format "T1234 - Name", extract just "Name"
+    if ' - ' in technique and technique.startswith('T'):
+        return technique.split(' - ', 1)[1]
+    
+    # Otherwise return as is (likely already in the correct format from library)
+    return technique
+
 # Function to get suggested use cases based on log sources
 def get_suggested_use_cases(uploaded_df, library_df):
     """
@@ -598,14 +623,14 @@ def batch_check_library_matches(descriptions: List[str],
     
     return all_results
 
-# Optimized function to batch process mapping to MITRE
+# Modified function to batch process mapping to MITRE with proper formatting
 def batch_map_to_mitre(descriptions: List[str], 
                       _model: SentenceTransformer, 
                       mitre_techniques: List[Dict], 
                       mitre_embeddings: torch.Tensor, 
                       batch_size: int = 32) -> List[Tuple]:
     """
-    Map a batch of descriptions to MITRE ATT&CK techniques for better performance
+    Map a batch of descriptions to MITRE ATT&CK techniques with consistent formatting
     """
     if _model is None or mitre_embeddings is None:
         return [("N/A", "N/A", "N/A", [], 0.0) for _ in descriptions]
@@ -627,11 +652,20 @@ def batch_map_to_mitre(descriptions: List[str],
             for j, (score, idx) in enumerate(zip(best_scores, best_indices)):
                 best_tech = mitre_techniques[idx]
                 
+                # Capitalize tactic names for consistency
+                capitalized_tactic = capitalize_tactic(best_tech['tactic'])
+                
+                # Extract just the technique name (without ID)
+                technique_name = best_tech['name']
+                
+                # Capitalize tactics list
+                capitalized_tactics_list = [capitalize_tactic(t) for t in best_tech['tactics_list']]
+                
                 results.append((
-                    best_tech['tactic'], 
-                    f"{best_tech['id']} - {best_tech['name']}", 
+                    capitalized_tactic,     # Capitalized tactic names
+                    technique_name,         # Just the technique name without ID
                     best_tech['url'], 
-                    best_tech['tactics_list'], 
+                    capitalized_tactics_list, 
                     score
                 ))
                 
@@ -644,10 +678,10 @@ def batch_map_to_mitre(descriptions: List[str],
     
     return results
 
-# Main optimized mapping processing function
+# Modified main optimized mapping processing function
 def process_mappings(df, _model, mitre_techniques, mitre_embeddings, library_df, library_embeddings):
     """
-    Main function to process mappings in an optimized way
+    Main function to process mappings in an optimized way with consistent formatting
     """
     # Fixed similarity threshold
     similarity_threshold = 0.8
@@ -697,6 +731,10 @@ def process_mappings(df, _model, mitre_techniques, mitre_embeddings, library_df,
             tactic = matched_row.get('Mapped MITRE Tactic(s)', 'N/A')
             technique = matched_row.get('Mapped MITRE Technique(s)', 'N/A')
             reference = matched_row.get('Reference Resource(s)', 'N/A')
+            
+            # Ensure tactic is correctly capitalized
+            tactic = capitalize_tactic(tactic)
+            
             tactics_list = tactic.split(', ') if tactic != 'N/A' else []
             confidence = match_score
             
@@ -704,14 +742,21 @@ def process_mappings(df, _model, mitre_techniques, mitre_embeddings, library_df,
             tactics[i] = tactic
             techniques[i] = technique
             references[i] = reference
-            all_tactics_lists[i] = tactics_list
-            confidence_scores[i] = round(confidence * 100, 2)
+            all_tactics_lists[i] = tactics_confidence_scores[i] = round(confidence * 100, 2)
             match_sources[i] = match_source
             match_scores[i] = round(match_score * 100, 2)
             
-            # Count techniques
-            if '-' in technique:
-                tech_id = technique.split('-')[0].strip()
+            # Count techniques for navigator layer
+            # Extract technique ID if possible, otherwise use the whole technique name
+            if technique != "N/A":
+                # For format "T1234 - Name" extract T1234
+                if ' - ' in technique and technique.startswith('T'):
+                    tech_id = technique.split(' - ')[0].strip()
+                else:
+                    # For other formats like library's "Multi-hop Proxy", look up ID in techniques list
+                    found_tech = next((t for t in mitre_techniques if t['name'] == technique), None)
+                    tech_id = found_tech['id'] if found_tech else technique
+                
                 techniques_count[tech_id] = techniques_count.get(tech_id, 0) + 1
         else:
             # Make sure we're not trying to map invalid descriptions
@@ -732,21 +777,24 @@ def process_mappings(df, _model, mitre_techniques, mitre_embeddings, library_df,
         # Process model results and insert at the correct positions
         for (i, idx) in enumerate(model_map_indices):
             if i < len(model_results):
-                tactic, technique, reference, tactics_list, confidence = model_results[i]
+                tactic, technique_name, reference, tactics_list, confidence = model_results[i]
                 
-                # Insert at the correct position
-                tactics[idx] = tactic
-                techniques[idx] = technique
-                references[idx] = reference
-                all_tactics_lists[idx] = tactics_list
-                confidence_scores[idx] = round(confidence * 100, 2)
-                match_sources[idx] = "Model mapping"
-                match_scores[idx] = 0  # No library match score
-                
-                # Count
-                # Count techniques
-                if '-' in technique:
-                    tech_id = technique.split('-')[0].strip()
+                # Find the technique ID
+                found_tech = next((t for t in mitre_techniques if t['name'] == technique_name), None)
+                if found_tech:
+                    tech_id = found_tech['id']
+                    
+                    # Insert at the correct position
+                    tactics[idx] = tactic  # Already capitalized in batch_map_to_mitre
+                    # Store only the technique name without ID prefix for consistent format
+                    techniques[idx] = technique_name
+                    references[idx] = reference
+                    all_tactics_lists[idx] = tactics_list
+                    confidence_scores[idx] = round(confidence * 100, 2)
+                    match_sources[idx] = "Model mapping"
+                    match_scores[idx] = 0  # No library match score
+                    
+                    # Count techniques
                     techniques_count[tech_id] = techniques_count.get(tech_id, 0) + 1
  
     # Add results to dataframe
@@ -859,7 +907,7 @@ with st.sidebar:
     """)
     
     st.markdown("---")
-    st.markdown("© 2025 | v1.4.0 (Enhanced)")
+    st.markdown("© 2025 | v1.4.1 (Enhanced)")
 
 # Load the ML model and MITRE data
 model = load_model()
@@ -1196,23 +1244,12 @@ elif st.session_state.page == "analytics":
             technique_ids = list(techniques_count.keys())
             technique_counts = list(techniques_count.values())
             
-            # Get technique names - with improved extraction to fix "Multi:unknown" issue
+            # Get technique names - with improved formatting
             technique_names = []
             for tech_id in technique_ids:
-                # Find the full technique information in the processed data
-                full_tech_info = None
-                for _, row in df.iterrows():
-                    technique = row.get('Mapped MITRE Technique(s)', '')
-                    if not pd.isna(technique) and tech_id in technique:
-                        full_tech_info = technique
-                        break
-                
-                # If found in the data, use the full name; otherwise, look for it in mitre_techniques
-                if full_tech_info:
-                    technique_names.append(full_tech_info)
-                else:
-                    tech_name = next((t['name'] for t in mitre_techniques if t['id'] == tech_id), tech_id)
-                    technique_names.append(f"{tech_id} - {tech_name}")
+                # Find the technique name in the mitre_techniques list
+                tech_name = next((t['name'] for t in mitre_techniques if t['id'] == tech_id), tech_id)
+                technique_names.append(tech_name)
             
             technique_df = pd.DataFrame({
                 'Technique': technique_names,
