@@ -505,7 +505,6 @@ def load_library_data_with_embeddings(_model):
         # Use batching for encoding
         batch_size = 32
         all_embeddings = []
-        
         for i in range(0, len(descriptions), batch_size):
             batch = descriptions[i:i+batch_size]
             batch_embeddings = _model.encode(batch, convert_to_tensor=True)
@@ -631,6 +630,7 @@ def batch_map_to_mitre(descriptions: List[str],
                       batch_size: int = 32) -> List[Tuple]:
     """
     Map a batch of descriptions to MITRE ATT&CK techniques with consistent formatting
+    Returns: list of tuples (tactic, technique, reference, tactics_list, confidence)
     """
     if _model is None or mitre_embeddings is None:
         return [("N/A", "N/A", "N/A", [], 0.0) for _ in descriptions]
@@ -735,14 +735,17 @@ def process_mappings(df, _model, mitre_techniques, mitre_embeddings, library_df,
             # Ensure tactic is correctly capitalized
             tactic = capitalize_tactic(tactic)
             
-            tactics_list = tactic.split(', ') if tactic != 'N/A' else []
+            # For tactics list, split tactic string and ensure capitalization
+            tactics_list = [capitalize_tactic(t.strip()) for t in tactic.split(',')] if tactic != 'N/A' else []
+            
             confidence = match_score
             
             # Store results
             tactics[i] = tactic
             techniques[i] = technique
             references[i] = reference
-            all_tactics_lists[i] = tactics_confidence_scores[i] = round(confidence * 100, 2)
+            all_tactics_lists[i] = tactics_list
+            confidence_scores[i] = round(confidence * 100, 2)
             match_sources[i] = match_source
             match_scores[i] = round(match_score * 100, 2)
             
@@ -907,7 +910,7 @@ with st.sidebar:
     """)
     
     st.markdown("---")
-    st.markdown("© 2025 | v1.4.1 (Enhanced)")
+    st.markdown("© 2025 | v1.4.2 (Fixed)")
 
 # Load the ML model and MITRE data
 model = load_model()
@@ -988,34 +991,40 @@ if st.session_state.page == "home":
                             progress_bar = st.progress(0)
                             start_time = time.time()
                             
-                            # Use the optimized batch processing function
-                            df, techniques_count = process_mappings(
-                                df, 
-                                model, 
-                                mitre_techniques, 
-                                st.session_state.mitre_embeddings,
-                                st.session_state.library_data,
-                                st.session_state.library_embeddings
-                            )
-                            
-                            # Store processed data in session state
-                            st.session_state.processed_data = df
-                            st.session_state.techniques_count = techniques_count
-                            st.session_state.mapping_complete = True
-                            
-                            # Complete
-                            elapsed_time = time.time() - start_time
-                            progress_bar.progress(100)
-                            
-                            st.success(f"Mapping complete in {elapsed_time:.2f} seconds! Navigate to Results to view the data.")
-                            
-                            # Add a suggestion to check the new Suggestions page
-                            st.info("Don't forget to check the Suggestions page for additional use cases based on your log sources!")
-                            
-                            # Add a button to go directly to suggestions
-                            if st.button("View Suggested Use Cases"):
-                                st.session_state.page = "suggestions"
-                                st.experimental_rerun()
+                            try:
+                                # Use the optimized batch processing function
+                                df, techniques_count = process_mappings(
+                                    df, 
+                                    model, 
+                                    mitre_techniques, 
+                                    st.session_state.mitre_embeddings,
+                                    st.session_state.library_data,
+                                    st.session_state.library_embeddings
+                                )
+                                
+                                # Store processed data in session state
+                                st.session_state.processed_data = df
+                                st.session_state.techniques_count = techniques_count
+                                st.session_state.mapping_complete = True
+                                
+                                # Complete
+                                elapsed_time = time.time() - start_time
+                                progress_bar.progress(100)
+                                
+                                st.success(f"Mapping complete in {elapsed_time:.2f} seconds! Navigate to Results to view the data.")
+                                
+                                # Add a suggestion to check the new Suggestions page
+                                st.info("Don't forget to check the Suggestions page for additional use cases based on your log sources!")
+                                
+                                # Add a button to go directly to suggestions
+                                if st.button("View Suggested Use Cases"):
+                                    st.session_state.page = "suggestions"
+                                    st.experimental_rerun()
+                            except Exception as e:
+                                st.error(f"Error during mapping process: {str(e)}")
+                                import traceback
+                                st.error(traceback.format_exc())
+                                
             except Exception as e:
                 st.error(f"Error processing file: {str(e)}")
         
@@ -1221,8 +1230,7 @@ elif st.session_state.page == "analytics":
                 labels=tactic_df['Tactic'],
                 values=tactic_df['Use Cases'],
                 hole=.5,
-                textposition='outside',  # Modified: This ensures all labels are outside
-                textinfo='label+percent',
+                textposition='outside',textinfo='label+percent',
                 marker=dict(colors=px.colors.qualitative.Dark24)  # Using Dark24 for better contrast
             )])
             
