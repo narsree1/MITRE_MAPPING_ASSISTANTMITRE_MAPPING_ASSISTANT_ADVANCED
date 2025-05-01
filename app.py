@@ -1126,7 +1126,149 @@ elif st.session_state.page == "results":
             st.experimental_rerun()
 
 # Analytics page
+# Analytics page with fixes for both issues
 elif st.session_state.page == "analytics":
+    st.markdown("# 📈 Coverage Analytics")
+    
+    if st.session_state.mapping_complete and st.session_state.processed_data is not None:
+        df = st.session_state.processed_data
+        techniques_count = st.session_state.techniques_count
+        
+        # Key metrics
+        col1, col2, col3, col4 = st.columns(4)
+        
+        total_techniques = 203  # Total number of MITRE techniques
+        covered_techniques = len(techniques_count.keys())
+        coverage_percent = round((covered_techniques / total_techniques) * 100, 2)
+        
+        # Count library matches vs model matches - handle NaN values safely
+        library_matches = df[df['Match Source'].fillna('Unknown').astype(str).str.contains('library', case=False, na=False)].shape[0]
+        model_matches = df[df['Match Source'].fillna('Unknown').astype(str).str.contains('Model', case=False, na=False)].shape[0]
+        
+        with col1:
+            st.markdown("""
+            <div class="metric-card">
+                <div class="metric-value">{}</div>
+                <div class="metric-label">Security Use Cases</div>
+            </div>
+            """.format(len(df)), unsafe_allow_html=True)
+        
+        with col2:
+            st.markdown("""
+            <div class="metric-card">
+                <div class="metric-value">{}</div>
+                <div class="metric-label">Mapped Techniques</div>
+            </div>
+            """.format(covered_techniques), unsafe_allow_html=True)
+        
+        with col3:
+            st.markdown("""
+            <div class="metric-card">
+                <div class="metric-value">{}%</div>
+                <div class="metric-label">Framework Coverage</div>
+            </div>
+            """.format(coverage_percent), unsafe_allow_html=True)
+        
+        with col4:
+            st.markdown("""
+            <div class="metric-card">
+                <div class="metric-value">{} / {}</div>
+                <div class="metric-label">Library Matches / Model Matches</div>
+            </div>
+            """.format(library_matches, model_matches), unsafe_allow_html=True)
+        
+        # Match source chart
+        st.markdown("### Mapping Source Distribution")
+        
+        # Handle empty or all-NaN columns
+        if not df['Match Source'].isna().all():
+            match_source_counts = df['Match Source'].fillna('Unknown').value_counts().reset_index()
+            match_source_counts.columns = ['Source', 'Count']
+            
+            # Create chart only if there's data
+            if not match_source_counts.empty:
+                fig_source = px.pie(
+                    match_source_counts, 
+                    values='Count', 
+                    names='Source',
+                    title="Distribution of Mapping Sources",
+                    hole=0.5,
+                    color_discrete_sequence=px.colors.qualitative.Set3
+                )
+                
+                fig_source.update_layout(
+                    legend=dict(orientation="h", yanchor="bottom", y=-0.2)
+                )
+                st.plotly_chart(fig_source, use_container_width=True)
+            else:
+                st.info("No mapping source data available for visualization.")
+        else:
+            st.info("No mapping source data available for visualization.")
+        
+        # Coverage by Tactic - Doughnut Chart with better color scheme and fixed duplicates
+        st.markdown("### Coverage by Tactic")
+        
+        # Create data for tactic coverage using the fixed function
+        tactic_df = generate_tactic_visualization(df)
+        
+        if not tactic_df.empty:
+            # Create doughnut chart for tactic coverage with better colors
+            fig_tactic = go.Figure(data=[go.Pie(
+                labels=tactic_df['Tactic'],
+                values=tactic_df['Use Cases'],
+                hole=.5,
+                textposition='outside',  # Modified: This ensures all labels are outside
+                textinfo='label+percent',
+                marker=dict(colors=px.colors.qualitative.Dark24)  # Using Dark24 for better contrast
+            )])
+            
+            fig_tactic.update_layout(
+                title="Security Use Cases by MITRE Tactic",
+                showlegend=False,  # Remove legend to prevent overlap
+                margin=dict(t=50, b=50, l=100, r=100)  # Added: Margin for external labels
+            )
+            
+            st.plotly_chart(fig_tactic, use_container_width=True)
+        else:
+            st.info("No tactic data available for visualization.")
+        
+        # Coverage by Technique - Doughnut Chart with fixed comma-separated techniques
+        st.markdown("### Coverage by Technique")
+        
+        # Process the techniques data first to correctly handle comma-separated techniques
+        techniques_count = process_techniques_for_analytics(df, mitre_techniques)
+        
+        if techniques_count:
+            # Get technique visualization data using the fixed function
+            technique_df = generate_technique_visualization(techniques_count, mitre_techniques).head(10)
+            
+            # Create doughnut chart for technique coverage with better colors
+            fig_tech = go.Figure(data=[go.Pie(
+                labels=technique_df['Technique'],
+                values=technique_df['Count'],
+                hole=.5,
+                textposition='outside',  # Modified: This ensures all labels are outside
+                textinfo='label+percent',
+                marker=dict(colors=px.colors.qualitative.Bold)  # Using Bold color scheme for better contrast
+            )])
+            
+            fig_tech.update_layout(
+                title="Top 10 MITRE Techniques in Security Use Cases",
+                showlegend=False,  # Remove legend to prevent overlap
+                margin=dict(t=50, b=50, l=100, r=100)  # Added: Margin for external labels
+            )
+            
+            st.plotly_chart(fig_tech, use_container_width=True)
+        else:
+            st.info("No technique data available for visualization.")
+    
+    else:
+        st.info("No analytics data available. Please upload a CSV file on the Home page and complete the mapping process.")
+        
+        # Add a button to navigate back to home
+        if st.button("Go to Home"):
+            st.session_state.page = "home"
+            st.experimental_rerun()
     st.markdown("# 📈 Coverage Analytics")
     
     if st.session_state.mapping_complete and st.session_state.processed_data is not None:
