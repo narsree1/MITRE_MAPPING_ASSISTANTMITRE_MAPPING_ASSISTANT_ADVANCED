@@ -72,6 +72,184 @@ def batch_similarity_search(query_embeddings, reference_embeddings):
     
     return best_scores.tolist(), best_indices.tolist()
 
+# Helper functions for consistent formatting
+def normalize_tactic_name(tactic):
+    """
+    Normalize tactic names to a canonical form to avoid duplicates in charts
+    (e.g., "Command And Control" and "Command-and-control" become the same)
+    """
+    if not tactic or tactic == 'N/A':
+        return tactic
+        
+    # Convert to lowercase for normalization
+    tactic_lower = tactic.lower()
+    
+    # Define canonical forms for known variations
+    canonical_forms = {
+        "command and control": "Command and Control",
+        "command-and-control": "Command and Control",
+        "commandandcontrol": "Command and Control",
+        "persistence": "Persistence",
+        "discovery": "Discovery",
+        "execution": "Execution",
+        "privilege escalation": "Privilege Escalation",
+        "defense evasion": "Defense Evasion",
+        "credential access": "Credential Access",
+        "lateral movement": "Lateral Movement",
+        "collection": "Collection",
+        "exfiltration": "Exfiltration",
+        "impact": "Impact",
+        "initial access": "Initial Access",
+    }
+    
+    # Remove spaces, hyphens, etc. for fuzzy matching
+    simplified = tactic_lower.replace(" ", "").replace("-", "").replace("_", "")
+    
+    # Try exact match first
+    if tactic_lower in canonical_forms:
+        return canonical_forms[tactic_lower]
+    
+    # Try simplified match
+    for key, value in canonical_forms.items():
+        if key.replace(" ", "") == simplified:
+            return value
+    
+    # Default: capitalize first letter of each word
+    return ' '.join(word.capitalize() for word in tactic.split())
+
+def capitalize_tactic(tactic):
+    """
+    Capitalize tactic name and ensure consistent format using normalization
+    """
+    if not tactic or tactic == 'N/A':
+        return tactic
+        
+    # Handle comma-separated tactics
+    if ',' in tactic:
+        return ', '.join([normalize_tactic_name(t.strip()) for t in tactic.split(',')])
+        
+    # Normalize single tactic
+    return normalize_tactic_name(tactic)
+
+def extract_technique_name(technique):
+    """Extract just the technique name from the format 'ID - Name'"""
+    if not technique or technique == 'N/A':
+        return technique
+        
+    # If in the format "T1234 - Name", extract just "Name"
+    if ' - ' in technique and technique.startswith('T'):
+        return technique.split(' - ', 1)[1]
+    
+    # Otherwise return as is (likely already in the correct format from library)
+    return technique
+
+# Functions for analytics visualization
+def generate_tactic_visualization(df):
+    """
+    Generate data for tactic visualization, properly handling
+    normalization to avoid duplicates
+    """
+    tactic_counts = {}
+    
+    for _, row in df.iterrows():
+        tactic_str = row.get('Mapped MITRE Tactic(s)', '')
+        if pd.isna(tactic_str) or tactic_str == 'N/A':
+            continue
+            
+        # Split and normalize each tactic
+        tactics = [t.strip() for t in tactic_str.split(',')]
+        for tactic in tactics:
+            if tactic and tactic != 'N/A':
+                # Normalize to avoid duplicates like "Command And Control" vs "Command-and-control"
+                normalized_tactic = normalize_tactic_name(tactic)
+                tactic_counts[normalized_tactic] = tactic_counts.get(normalized_tactic, 0) + 1
+    
+    # Transform to dataframe for visualization
+    tactic_df = pd.DataFrame({
+        'Tactic': list(tactic_counts.keys()),
+        'Use Cases': list(tactic_counts.values())
+    }).sort_values('Use Cases', ascending=False)
+    
+    return tactic_df
+
+def process_techniques_for_analytics(df, mitre_techniques):
+    """
+    Process techniques from the dataframe, properly handling cases where
+    multiple techniques are comma-separated in a single field
+    """
+    techniques_count = {}
+    technique_name_mapping = {}  # Map technique names to their IDs
+    
+    # First build a mapping of technique names to IDs
+    for tech in mitre_techniques:
+        technique_name_mapping[tech['name']] = tech['id']
+    
+    # Process each row in the dataframe
+    for _, row in df.iterrows():
+        technique_str = row.get('Mapped MITRE Technique(s)', '')
+        if pd.isna(technique_str) or technique_str == 'N/A':
+            continue
+            
+        # Handle comma-separated techniques by splitting
+        techniques = [t.strip() for t in technique_str.split(',')]
+        
+        for technique in techniques:
+            if not technique:
+                continue
+                
+            # Extract ID if in "T1234 - Name" format
+            if ' - ' in technique and technique.startswith('T'):
+                tech_id = technique.split(' - ')[0].strip()
+                tech_name = technique.split(' - ')[1].strip()
+            else:
+                # Look up ID by name
+                tech_name = technique
+                tech_id = technique_name_mapping.get(tech_name, None)
+                
+                # If we couldn't find the ID, try to match it to a known technique
+                if not tech_id:
+                    # Try fuzzy matching by comparing with known technique names
+                    for known_name, known_id in technique_name_mapping.items():
+                        if known_name.lower() == tech_name.lower():
+                            tech_id = known_id
+                            tech_name = known_name
+                            break
+                
+                # If we still can't find it, use the name as the ID
+                if not tech_id:
+                    tech_id = tech_name
+            
+            # Count this technique
+            techniques_count[tech_id] = techniques_count.get(tech_id, 0) + 1
+    
+    return techniques_count
+
+def generate_technique_visualization(techniques_count, mitre_techniques):
+    """
+    Generate data for technique visualization, ensuring proper handling
+    of technique names
+    """
+    # Get top techniques
+    technique_ids = list(techniques_count.keys())
+    technique_counts = list(techniques_count.values())
+    
+    # Create mapping from technique ID to name
+    id_to_name = {t['id']: t['name'] for t in mitre_techniques}
+    
+    # Get technique names - with improved formatting
+    technique_names = []
+    for tech_id in technique_ids:
+        # Find the technique name in the mitre_techniques list
+        tech_name = id_to_name.get(tech_id, tech_id)
+        technique_names.append(tech_name)
+    
+    technique_df = pd.DataFrame({
+        'Technique': technique_names,
+        'Count': technique_counts
+    }).sort_values('Count', ascending=False)
+    
+    return technique_df
+
 # Custom CSS for modern look
 st.markdown("""
 <style>
@@ -206,31 +384,6 @@ if 'mitre_embeddings' not in st.session_state:
     st.session_state.mitre_embeddings = None
 if '_uploaded_file' not in st.session_state:
     st.session_state._uploaded_file = None
-
-# Helper functions for consistent formatting
-def capitalize_tactic(tactic):
-    """Capitalize tactic name and ensure consistent format"""
-    if not tactic or tactic == 'N/A':
-        return tactic
-        
-    # Handle comma-separated tactics
-    if ',' in tactic:
-        return ', '.join([capitalize_tactic(t.strip()) for t in tactic.split(',')])
-        
-    # Capitalize first letter
-    return tactic[0].upper() + tactic[1:] if len(tactic) > 0 else tactic
-
-def extract_technique_name(technique):
-    """Extract just the technique name from the format 'ID - Name'"""
-    if not technique or technique == 'N/A':
-        return technique
-        
-    # If in the format "T1234 - Name", extract just "Name"
-    if ' - ' in technique and technique.startswith('T'):
-        return technique.split(' - ', 1)[1]
-    
-    # Otherwise return as is (likely already in the correct format from library)
-    return technique
 
 # Function to get suggested use cases based on log sources
 def get_suggested_use_cases(uploaded_df, library_df):
@@ -505,6 +658,7 @@ def load_library_data_with_embeddings(_model):
         # Use batching for encoding
         batch_size = 32
         all_embeddings = []
+        
         for i in range(0, len(descriptions), batch_size):
             batch = descriptions[i:i+batch_size]
             batch_embeddings = _model.encode(batch, convert_to_tensor=True)
@@ -601,316 +755,299 @@ def batch_check_library_matches(descriptions: List[str],
             # Handle encoding errors
             for j in range(len(batch)):
                 if i+j < len(valid_indices):
-                    orig_idx = valid_indices[i + j]
-                    results.append((orig_idx, (None, 0.0, f"Error during embedding: {str(e)}")))
-    
-    # Combine exact matches and embedding-based matches
-    all_results = []
-    for i in range(len(descriptions)):
-        if i in exact_matches:
-            all_results.append(exact_matches[i])
-        else:
-            # Find the result for this index
-            result_found = False
-            for idx, result in results:
-                if idx == i:
-                    all_results.append(result)
-                    result_found = True
-                    break
-            if not result_found:
-                all_results.append((None, 0.0, "No match found in library"))
-    
-    return all_results
+                orig_idx = valid_indices[i + j]
+                results.append((orig_idx, (None, 0.0, f"Error during embedding: {str(e)}")))
+
+# Combine exact matches and embedding-based matches
+all_results = []
+for i in range(len(descriptions)):
+    if i in exact_matches:
+        all_results.append(exact_matches[i])
+    else:
+        # Find the result for this index
+        result_found = False
+        for idx, result in results:
+            if idx == i:
+                all_results.append(result)
+                result_found = True
+                break
+        if not result_found:
+            all_results.append((None, 0.0, "No match found in library"))
+
+return all_results
 
 # Modified function to batch process mapping to MITRE with proper formatting
 def batch_map_to_mitre(descriptions: List[str], 
-                      _model: SentenceTransformer, 
-                      mitre_techniques: List[Dict], 
-                      mitre_embeddings: torch.Tensor, 
-                      batch_size: int = 32) -> List[Tuple]:
-    """
-    Map a batch of descriptions to MITRE ATT&CK techniques with consistent formatting
-    Returns: list of tuples (tactic, technique, reference, tactics_list, confidence)
-    """
-    if _model is None or mitre_embeddings is None:
-        return [("N/A", "N/A", "N/A", [], 0.0) for _ in descriptions]
+                  _model: SentenceTransformer, 
+                  mitre_techniques: List[Dict], 
+                  mitre_embeddings: torch.Tensor, 
+                  batch_size: int = 32) -> List[Tuple]:
+"""
+Map a batch of descriptions to MITRE ATT&CK techniques with consistent formatting
+Returns: list of tuples (tactic, technique, reference, tactics_list, confidence)
+"""
+if _model is None or mitre_embeddings is None:
+    return [("N/A", "N/A", "N/A", [], 0.0) for _ in descriptions]
+
+results = []
+
+# Process in batches
+for i in range(0, len(descriptions), batch_size):
+    batch = descriptions[i:i+batch_size]
     
-    results = []
-    
-    # Process in batches
-    for i in range(0, len(descriptions), batch_size):
-        batch = descriptions[i:i+batch_size]
+    try:
+        # Encode query batch
+        query_embeddings = _model.encode(batch, convert_to_tensor=True)
         
-        try:
-            # Encode query batch
-            query_embeddings = _model.encode(batch, convert_to_tensor=True)
+        # Get best matches using batch similarity search
+        best_scores, best_indices = batch_similarity_search(query_embeddings, mitre_embeddings)
+        
+        # Process results
+        for j, (score, idx) in enumerate(zip(best_scores, best_indices)):
+            best_tech = mitre_techniques[idx]
             
-            # Get best matches using batch similarity search
-            best_scores, best_indices = batch_similarity_search(query_embeddings, mitre_embeddings)
+            # Normalize tactic names for consistency
+            normalized_tactic = normalize_tactic_name(best_tech['tactic'])
             
-            # Process results
-            for j, (score, idx) in enumerate(zip(best_scores, best_indices)):
-                best_tech = mitre_techniques[idx]
-                
-                # Capitalize tactic names for consistency
-                capitalized_tactic = capitalize_tactic(best_tech['tactic'])
-                
-                # Extract just the technique name (without ID)
-                technique_name = best_tech['name']
-                
-                # Capitalize tactics list
-                capitalized_tactics_list = [capitalize_tactic(t) for t in best_tech['tactics_list']]
-                
-                results.append((
-                    capitalized_tactic,     # Capitalized tactic names
-                    technique_name,         # Just the technique name without ID
-                    best_tech['url'], 
-                    capitalized_tactics_list, 
-                    score
-                ))
-                
-        except Exception as e:
-            # Handle errors
-            print(f"Error mapping batch to MITRE: {e}")
-            # Fill with error values for this batch
-            for _ in range(len(batch)):
-                results.append(("Error", "Error", "Error", [], 0.0))
-    
-    return results
+            # Extract just the technique name (without ID)
+            technique_name = best_tech['name']
+            
+            # Normalize tactics list
+            normalized_tactics_list = [normalize_tactic_name(t) for t in best_tech['tactics_list']]
+            
+            results.append((
+                normalized_tactic,     # Normalized tactic names
+                technique_name,        # Just the technique name without ID
+                best_tech['url'], 
+                normalized_tactics_list, 
+                score
+            ))
+            
+    except Exception as e:
+        # Handle errors
+        print(f"Error mapping batch to MITRE: {e}")
+        # Fill with error values for this batch
+        for _ in range(len(batch)):
+            results.append(("Error", "Error", "Error", [], 0.0))
+
+return results
 
 # Modified main optimized mapping processing function
 def process_mappings(df, _model, mitre_techniques, mitre_embeddings, library_df, library_embeddings):
-    """
-    Main function to process mappings in an optimized way with consistent formatting
-    """
-    # Fixed similarity threshold
-    similarity_threshold = 0.8
+"""
+Main function to process mappings in an optimized way with consistent formatting
+"""
+# Fixed similarity threshold
+similarity_threshold = 0.8
+
+# Get all descriptions at once and validate them
+descriptions = []
+for desc in df['Description'].tolist():
+    if pd.isna(desc) or desc is None or isinstance(desc, float):
+        descriptions.append("No description available")
+    else:
+        descriptions.append(str(desc))  # Convert to string to ensure it's a string
+
+# First batch check library matches
+library_match_results = batch_check_library_matches(
+    descriptions, library_df, library_embeddings, _model, similarity_threshold=similarity_threshold
+)
+
+# Prepare lists for rows that need model mapping
+model_map_indices = []
+model_map_descriptions = []
+
+# Process results and collect cases needing model mapping
+tactics = []
+techniques = []
+references = []
+all_tactics_lists = []
+confidence_scores = []
+match_sources = []
+match_scores = []
+
+# Make sure all lists have entries for each row in the dataframe
+for _ in range(len(df)):
+    tactics.append("N/A")
+    techniques.append("N/A")
+    references.append("N/A")
+    all_tactics_lists.append([])
+    confidence_scores.append(0)
+    match_sources.append("N/A")
+    match_scores.append(0)
+
+for i, library_match in enumerate(library_match_results):
+    matched_row, match_score, match_source = library_match
     
-    # Get all descriptions at once and validate them
-    descriptions = []
-    for desc in df['Description'].tolist():
-        if pd.isna(desc) or desc is None or isinstance(desc, float):
-            descriptions.append("No description available")
+    if matched_row is not None:
+        # Use library match
+        tactic = matched_row.get('Mapped MITRE Tactic(s)', 'N/A')
+        technique = matched_row.get('Mapped MITRE Technique(s)', 'N/A')
+        reference = matched_row.get('Reference Resource(s)', 'N/A')
+        
+        # Ensure tactic is correctly capitalized and normalized
+        tactic = capitalize_tactic(tactic)
+        
+        # For tactics list, split tactic string and ensure capitalization/normalization
+        tactics_list = [normalize_tactic_name(t.strip()) for t in tactic.split(',')] if tactic != 'N/A' else []
+        
+        confidence = match_score
+        
+        # Store results
+        tactics[i] = tactic
+        techniques[i] = technique
+        references[i] = reference
+        all_tactics_lists[i] = tactics_list
+        confidence_scores[i] = round(confidence * 100, 2)
+        match_sources[i] = match_source
+        match_scores[i] = round(match_score * 100, 2)
+    else:
+        # Make sure we're not trying to map invalid descriptions
+        if not (descriptions[i] == "No description available" or pd.isna(descriptions[i])):
+            # Mark for model mapping
+            model_map_indices.append(i)
+            model_map_descriptions.append(descriptions[i])
         else:
-            descriptions.append(str(desc))  # Convert to string to ensure it's a string
-    
-    # First batch check library matches
-    library_match_results = batch_check_library_matches(
-        descriptions, library_df, library_embeddings, _model, similarity_threshold=similarity_threshold
+            # Invalid description placeholders are already set by default
+            match_sources[i] = "Invalid description"
+
+# Batch map remaining cases using model
+if model_map_descriptions:
+    model_results = batch_map_to_mitre(
+        model_map_descriptions, _model, mitre_techniques, mitre_embeddings
     )
     
-    # Prepare lists for rows that need model mapping
-    model_map_indices = []
-    model_map_descriptions = []
-    
-    # Process results and collect cases needing model mapping
-    tactics = []
-    techniques = []
-    references = []
-    all_tactics_lists = []
-    confidence_scores = []
-    match_sources = []
-    match_scores = []
-    techniques_count = {}
-    
-    # Make sure all lists have entries for each row in the dataframe
-    for _ in range(len(df)):
-        tactics.append("N/A")
-        techniques.append("N/A")
-        references.append("N/A")
-        all_tactics_lists.append([])
-        confidence_scores.append(0)
-        match_sources.append("N/A")
-        match_scores.append(0)
-    
-    for i, library_match in enumerate(library_match_results):
-        matched_row, match_score, match_source = library_match
-        
-        if matched_row is not None:
-            # Use library match
-            tactic = matched_row.get('Mapped MITRE Tactic(s)', 'N/A')
-            technique = matched_row.get('Mapped MITRE Technique(s)', 'N/A')
-            reference = matched_row.get('Reference Resource(s)', 'N/A')
+    # Process model results and insert at the correct positions
+    for (i, idx) in enumerate(model_map_indices):
+        if i < len(model_results):
+            tactic, technique_name, reference, tactics_list, confidence = model_results[i]
             
-            # Ensure tactic is correctly capitalized
-            tactic = capitalize_tactic(tactic)
-            
-            # For tactics list, split tactic string and ensure capitalization
-            tactics_list = [capitalize_tactic(t.strip()) for t in tactic.split(',')] if tactic != 'N/A' else []
-            
-            confidence = match_score
-            
-            # Store results
-            tactics[i] = tactic
-            techniques[i] = technique
-            references[i] = reference
-            all_tactics_lists[i] = tactics_list
-            confidence_scores[i] = round(confidence * 100, 2)
-            match_sources[i] = match_source
-            match_scores[i] = round(match_score * 100, 2)
-            
-            # Count techniques for navigator layer
-            # Extract technique ID if possible, otherwise use the whole technique name
-            if technique != "N/A":
-                # For format "T1234 - Name" extract T1234
-                if ' - ' in technique and technique.startswith('T'):
-                    tech_id = technique.split(' - ')[0].strip()
-                else:
-                    # For other formats like library's "Multi-hop Proxy", look up ID in techniques list
-                    found_tech = next((t for t in mitre_techniques if t['name'] == technique), None)
-                    tech_id = found_tech['id'] if found_tech else technique
-                
-                techniques_count[tech_id] = techniques_count.get(tech_id, 0) + 1
-        else:
-            # Make sure we're not trying to map invalid descriptions
-            if not (descriptions[i] == "No description available" or pd.isna(descriptions[i])):
-                # Mark for model mapping
-                model_map_indices.append(i)
-                model_map_descriptions.append(descriptions[i])
-            else:
-                # Invalid description placeholders are already set by default
-                match_sources[i] = "Invalid description"
-    
-    # Batch map remaining cases using model
-    if model_map_descriptions:
-        model_results = batch_map_to_mitre(
-            model_map_descriptions, _model, mitre_techniques, mitre_embeddings
-        )
-        
-        # Process model results and insert at the correct positions
-        for (i, idx) in enumerate(model_map_indices):
-            if i < len(model_results):
-                tactic, technique_name, reference, tactics_list, confidence = model_results[i]
-                
-                # Find the technique ID
-                found_tech = next((t for t in mitre_techniques if t['name'] == technique_name), None)
-                if found_tech:
-                    tech_id = found_tech['id']
-                    
-                    # Insert at the correct position
-                    tactics[idx] = tactic  # Already capitalized in batch_map_to_mitre
-                    # Store only the technique name without ID prefix for consistent format
-                    techniques[idx] = technique_name
-                    references[idx] = reference
-                    all_tactics_lists[idx] = tactics_list
-                    confidence_scores[idx] = round(confidence * 100, 2)
-                    match_sources[idx] = "Model mapping"
-                    match_scores[idx] = 0  # No library match score
-                    
-                    # Count techniques
-                    techniques_count[tech_id] = techniques_count.get(tech_id, 0) + 1
- 
-    # Add results to dataframe
-    df['Mapped MITRE Tactic(s)'] = tactics
-    df['Mapped MITRE Technique(s)'] = techniques
-    df['Reference Resource(s)'] = references
-    df['Confidence Score (%)'] = confidence_scores
-    df['Match Source'] = match_sources
-    df['Library Match Score (%)'] = match_scores
-    
-    return df, techniques_count
+            # Find the technique ID
+            found_tech = next((t for t in mitre_techniques if t['name'] == technique_name), None)
+            if found_tech:
+                # Insert at the correct position
+                tactics[idx] = tactic  # Already normalized in batch_map_to_mitre
+                techniques[idx] = technique_name
+                references[idx] = reference
+                all_tactics_lists[idx] = tactics_list
+                confidence_scores[idx] = round(confidence * 100, 2)
+                match_sources[idx] = "Model mapping"
+                match_scores[idx] = 0  # No library match score
+
+# Add results to dataframe
+df['Mapped MITRE Tactic(s)'] = tactics
+df['Mapped MITRE Technique(s)'] = techniques
+df['Reference Resource(s)'] = references
+df['Confidence Score (%)'] = confidence_scores
+df['Match Source'] = match_sources
+df['Library Match Score (%)'] = match_scores
+
+# Process techniques for the techniques count using our improved function
+techniques_count = process_techniques_for_analytics(df, mitre_techniques)
+
+return df, techniques_count
 
 def create_navigator_layer(techniques_count):
-    try:
-        techniques_data = []
-        for tech_id, count in techniques_count.items():
-            techniques_data.append({
-                "techniqueID": tech_id,
-                "score": count,
-                "color": "",
-                "comment": f"Count: {count}",
-                "enabled": True,
-                "metadata": [],
-                "links": [],
-                "showSubtechniques": False
-            })
-        
-        current_date = datetime.datetime.now().strftime("%Y-%m-%d")
-        layer_id = str(uuid.uuid4())
-        
-        layer = {
-            "name": f"Security Use Cases Mapping - {current_date}",
-            "versions": {
-                "attack": "17",
-                "navigator": "4.8.1",
-                "layer": "4.4"
-            },
-            "domain": "enterprise-attack",
-            "description": f"Mapping of security use cases to MITRE ATT&CK techniques, generated on {current_date}",
-            "filters": {
-                "platforms": ["Linux", "macOS", "Windows", "Network", "PRE", "Containers", "Office 365", "SaaS", "IaaS", "Google Workspace", "Azure AD"]
-            },
-            "sorting": 0,
-            "layout": {
-                "layout": "side",
-                "aggregateFunction": "max",
-                "showID": True,
-                "showName": True,
-                "showAggregateScores": True,
-                "countUnscored": False
-            },
-            "hideDisabled": False,
-            "techniques": techniques_data,
-            "gradient": {
-                "colors": ["#ffffff", "#66b1ff", "#0d4a90"],
-                "minValue": 0,
-                "maxValue": max(techniques_count.values()) if techniques_count else 1
-            },
-            "legendItems": [],
+try:
+    techniques_data = []
+    for tech_id, count in techniques_count.items():
+        techniques_data.append({
+            "techniqueID": tech_id,
+            "score": count,
+            "color": "",
+            "comment": f"Count: {count}",
+            "enabled": True,
             "metadata": [],
             "links": [],
-            "showTacticRowBackground": True,
-            "tacticRowBackground": "#dddddd",
-            "selectTechniquesAcrossTactics": True,
-            "selectSubtechniquesWithParent": False
-        }
-        
-        return json.dumps(layer, indent=2), layer_id
-    except Exception as e:
-        st.error(f"Error creating Navigator layer: {e}")
-        return "{}", ""
+            "showSubtechniques": False
+        })
+    
+    current_date = datetime.datetime.now().strftime("%Y-%m-%d")
+    layer_id = str(uuid.uuid4())
+    
+    layer = {
+        "name": f"Security Use Cases Mapping - {current_date}",
+        "versions": {
+            "attack": "17",
+            "navigator": "4.8.1",
+            "layer": "4.4"
+        },
+        "domain": "enterprise-attack",
+        "description": f"Mapping of security use cases to MITRE ATT&CK techniques, generated on {current_date}",
+        "filters": {
+            "platforms": ["Linux", "macOS", "Windows", "Network", "PRE", "Containers", "Office 365", "SaaS", "IaaS", "Google Workspace", "Azure AD"]
+        },
+        "sorting": 0,
+        "layout": {
+            "layout": "side",
+            "aggregateFunction": "max",
+            "showID": True,
+            "showName": True,
+            "showAggregateScores": True,
+            "countUnscored": False
+        },
+        "hideDisabled": False,
+        "techniques": techniques_data,
+        "gradient": {
+            "colors": ["#ffffff", "#66b1ff", "#0d4a90"],
+            "minValue": 0,
+            "maxValue": max(techniques_count.values()) if techniques_count else 1
+        },
+        "legendItems": [],
+        "metadata": [],
+        "links": [],
+        "showTacticRowBackground": True,
+        "tacticRowBackground": "#dddddd",
+        "selectTechniquesAcrossTactics": True,
+        "selectSubtechniquesWithParent": False
+    }
+    
+    return json.dumps(layer, indent=2), layer_id
+except Exception as e:
+    st.error(f"Error creating Navigator layer: {e}")
+    return "{}", ""
 
 def load_lottie_url(url: str):
-    try:
-        r = requests.get(url)
-        if r.status_code != 200:
-            return None
-        return r.json()
-    except:
+try:
+    r = requests.get(url)
+    if r.status_code != 200:
         return None
+    return r.json()
+except:
+    return None
 
 # Sidebar navigation
 with st.sidebar:
-    st.image("https://attack.mitre.org/theme/images/mitre_attack_logo.png", width=200)
-    
-    selected = option_menu(
-        "Navigation",
-        ["Home", "Results", "Analytics", "Suggestions", "Export"],
-        icons=['house', 'table', 'graph-up', 'search', 'box-arrow-down'],
-        menu_icon="list",
-        default_index=0,
-    )
-    
-    st.session_state.page = selected.lower()
-    
-    st.markdown("---")
-    st.markdown("### About")
-    st.markdown("""
-    This tool maps your security use cases to the MITRE ATT&CK framework using:
-    
-    1. Library matching for known use cases
-    2. Natural language processing for new use cases
-    3. Suggestions for additional use cases based on your log sources
-    
-    - Upload a CSV with security use cases
-    - Get automatic MITRE ATT&CK mappings
-    - View suggested additional use cases
-    - Visualize your coverage
-    - Export for MITRE Navigator
-    """)
-    
-    st.markdown("---")
-    st.markdown("© 2025 | v1.4.2 (Fixed)")
+st.image("https://attack.mitre.org/theme/images/mitre_attack_logo.png", width=200)
+
+selected = option_menu(
+    "Navigation",
+    ["Home", "Results", "Analytics", "Suggestions", "Export"],
+    icons=['house', 'table', 'graph-up', 'search', 'box-arrow-down'],
+    menu_icon="list",
+    default_index=0,
+)
+
+st.session_state.page = selected.lower()
+
+st.markdown("---")
+st.markdown("### About")
+st.markdown("""
+This tool maps your security use cases to the MITRE ATT&CK framework using:
+
+1. Library matching for known use cases
+2. Natural language processing for new use cases
+3. Suggestions for additional use cases based on your log sources
+
+- Upload a CSV with security use cases
+- Get automatic MITRE ATT&CK mappings
+- View suggested additional use cases
+- Visualize your coverage
+- Export for MITRE Navigator
+""")
+
+st.markdown("---")
+st.markdown("© 2025 | v1.4.3 (Fixed)")
 
 # Load the ML model and MITRE data
 model = load_model()
@@ -923,564 +1060,407 @@ st.session_state.mitre_embeddings = mitre_embeddings
 # Load library data with optimized embedding search
 library_df, library_embeddings = load_library_data_with_embeddings(model)
 if library_df is not None:
-    st.session_state.library_data = library_df
-    st.session_state.library_embeddings = library_embeddings
+st.session_state.library_data = library_df
+st.session_state.library_embeddings = library_embeddings
 
 # Store model in session state for use in suggestions
 st.session_state.model = model
 
 # Home page
 if st.session_state.page == "home":
-    st.markdown("# 🛡️ MITRE ATT&CK Mapping Tool")
-    st.markdown("### Map your security use cases to the MITRE ATT&CK framework")
+st.markdown("# 🛡️ MITRE ATT&CK Mapping Tool")
+st.markdown("### Map your security use cases to the MITRE ATT&CK framework")
+
+col1, col2 = st.columns([3, 2])
+
+with col1:
+    st.markdown("### Upload Security Use Cases")
     
-    col1, col2 = st.columns([3, 2])
+    # Add animation
+    lottie_upload = load_lottie_url("https://assets8.lottiefiles.com/packages/lf20_F0tVCP.json")
+    if lottie_upload:
+        st_lottie(lottie_upload, height=200, key="upload_animation")
     
-    with col1:
-        st.markdown("### Upload Security Use Cases")
-        
-        # Add animation
-        lottie_upload = load_lottie_url("https://assets8.lottiefiles.com/packages/lf20_F0tVCP.json")
-        if lottie_upload:
-            st_lottie(lottie_upload, height=200, key="upload_animation")
-        
-        st.markdown("Upload a CSV file containing your security use cases. The file should include the columns: 'Use Case Name', 'Description', and 'Log Source'.")
-        
-        uploaded_file = st.file_uploader("Choose a CSV file", type="csv", key="file_upload")
-        
-        if uploaded_file is not None:
-            try:
-                df = pd.read_csv(uploaded_file)
+    st.markdown("Upload a CSV file containing your security use cases. The file should include the columns: 'Use Case Name', 'Description', and 'Log Source'.")
+    
+    uploaded_file = st.file_uploader("Choose a CSV file", type="csv", key="file_upload")
+    
+    if uploaded_file is not None:
+        try:
+            df = pd.read_csv(uploaded_file)
+            
+            # Store the uploaded file in session state for later use in suggestions
+            st.session_state._uploaded_file = uploaded_file
+            
+            # Check for required columns
+            required_cols = ['Use Case Name', 'Description', 'Log Source']
+            if not all(col in df.columns for col in required_cols):
+                st.error(f"Your CSV must contain the columns: {', '.join(required_cols)}")
+            else:
+                st.session_state.file_uploaded = True
+                st.success(f"File uploaded successfully! {len(df)} security use cases found.")
                 
-                # Store the uploaded file in session state for later use in suggestions
-                st.session_state._uploaded_file = uploaded_file
+                # Fill NaN values with placeholder text for all important columns
+                for col in df.columns:
+                    if df[col].dtype == 'object' or col in required_cols:
+                        df[col] = df[col].fillna("N/A")
                 
-                # Check for required columns
-                required_cols = ['Use Case Name', 'Description', 'Log Source']
-                if not all(col in df.columns for col in required_cols):
-                    st.error(f"Your CSV must contain the columns: {', '.join(required_cols)}")
-                else:
-                    st.session_state.file_uploaded = True
-                    st.success(f"File uploaded successfully! {len(df)} security use cases found.")
-                    
-                    # Fill NaN values with placeholder text for all important columns
-                    for col in df.columns:
-                        if df[col].dtype == 'object' or col in required_cols:
-                            df[col] = df[col].fillna("N/A")
-                    
-                    st.markdown("""
-                    1. **Upload** your security use cases CSV file
-                    2. The tool first **checks** if the use case exists in the library
-                    3. If found in library, it uses the **pre-mapped** MITRE data
-                    4. If not found, it **analyzes** the use case using NLP and maps it
-                    5. **View** mapped results, analytics, and export options
-                    6. **Discover** additional relevant use cases based on your log sources
-                    """)
-                    
-                    # Show preview of the uploaded data
-                    st.markdown("### Preview of Uploaded Data")
-                    st.dataframe(df.head(5), use_container_width=True)
-                    
-                    # Show library statistics if available
-                    if st.session_state.library_data is not None:
-                        st.info(f"Library has {len(st.session_state.library_data)} pre-mapped security use cases that will be matched first.")
-                    
-                    if st.button("Start Mapping", key="start_mapping"):
-                        with st.spinner("Mapping security use cases to MITRE ATT&CK..."):
-                            # Progress bar
-                            progress_bar = st.progress(0)
-                            start_time = time.time()
+                st.markdown("""
+                1. **Upload** your security use cases CSV file
+                2. The tool first **checks** if the use case exists in the library
+                3. If found in library, it uses the **pre-mapped** MITRE data
+                4. If not found, it **analyzes** the use case using NLP and maps it
+                5. **View** mapped results, analytics, and export options
+                6. **Discover** additional relevant use cases based on your log sources
+                """)
+                
+                # Show preview of the uploaded data
+                st.markdown("### Preview of Uploaded Data")
+                st.dataframe(df.head(5), use_container_width=True)
+                
+                # Show library statistics if available
+                if st.session_state.library_data is not None:
+                    st.info(f"Library has {len(st.session_state.library_data)} pre-mapped security use cases that will be matched first.")
+                
+                if st.button("Start Mapping", key="start_mapping"):
+                    with st.spinner("Mapping security use cases to MITRE ATT&CK..."):
+                        # Progress bar
+                        progress_bar = st.progress(0)
+                        start_time = time.time()
+                        
+                        try:
+                            # Use the optimized batch processing function
+                            df, techniques_count = process_mappings(
+                                df, 
+                                model, 
+                                mitre_techniques, 
+                                st.session_state.mitre_embeddings,
+                                st.session_state.library_data,
+                                st.session_state.library_embeddings
+                            )
                             
-                            try:
-                                # Use the optimized batch processing function
-                                df, techniques_count = process_mappings(
-                                    df, 
-                                    model, 
-                                    mitre_techniques, 
-                                    st.session_state.mitre_embeddings,
-                                    st.session_state.library_data,
-                                    st.session_state.library_embeddings
-                                )
-                                
-                                # Store processed data in session state
-                                st.session_state.processed_data = df
-                                st.session_state.techniques_count = techniques_count
-                                st.session_state.mapping_complete = True
-                                
-                                # Complete
-                                elapsed_time = time.time() - start_time
-                                progress_bar.progress(100)
-                                
-                                st.success(f"Mapping complete in {elapsed_time:.2f} seconds! Navigate to Results to view the data.")
-                                
-                                # Add a suggestion to check the new Suggestions page
-                                st.info("Don't forget to check the Suggestions page for additional use cases based on your log sources!")
-                                
-                                # Add a button to go directly to suggestions
-                                if st.button("View Suggested Use Cases"):
-                                    st.session_state.page = "suggestions"
-                                    st.experimental_rerun()
-                            except Exception as e:
-                                st.error(f"Error during mapping process: {str(e)}")
-                                import traceback
-                                st.error(traceback.format_exc())
-                                
-            except Exception as e:
-                st.error(f"Error processing file: {str(e)}")
-        
-    with col2:
-        st.markdown("### How It Works")
-        
-        with st.expander("📝 Requirements", expanded=True):
-            st.markdown("""
-            Your CSV file should include:
-            - 'Use Case Name': Name of the security use case
-            - 'Description': Detailed description of the use case
-            - 'Log Source': The log source for the use case
-            """)
-        
-        with st.expander("🔄 Process", expanded=True):
-            st.markdown("""
-            1. **Upload** your security use cases CSV file
-            2. The tool first **checks** if the use case exists in the library
-            3. If found in library, it uses the **pre-mapped** MITRE data
-            4. If not found, it **analyzes** the use case using NLP and maps it
-            5. **View** mapped results, analytics, and export options
-            6. **Discover** additional relevant use cases based on your log sources
-            """)
+                            # Store processed data in session state
+                            st.session_state.processed_data = df
+                            st.session_state.techniques_count = techniques_count
+                            st.session_state.mapping_complete = True
+                            
+                            # Complete
+                            elapsed_time = time.time() - start_time
+                            progress_bar.progress(100)
+                            
+                            st.success(f"Mapping complete in {elapsed_time:.2f} seconds! Navigate to Results to view the data.")
+                            
+                            # Add a suggestion to check the new Suggestions page
+                            st.info("Don't forget to check the Suggestions page for additional use cases based on your log sources!")
+                            
+                            # Add a button to go directly to suggestions
+                            if st.button("View Suggested Use Cases"):
+                                st.session_state.page = "suggestions"
+                                st.experimental_rerun()
+                        except Exception as e:
+                            st.error(f"Error during mapping process: {str(e)}")
+                            import traceback
+                            st.error(traceback.format_exc())
+                            
+        except Exception as e:
+            st.error(f"Error processing file: {str(e)}")
+    
+with col2:
+    st.markdown("### How It Works")
+    
+    with st.expander("📝 Requirements", expanded=True):
+        st.markdown("""
+        Your CSV file should include:
+        - 'Use Case Name': Name of the security use case
+        - 'Description': Detailed description of the use case
+        - 'Log Source': The log source for the use case
+        """)
+    
+    with st.expander("🔄 Process", expanded=True):
+        st.markdown("""
+        1. **Upload** your security use cases CSV file
+        2. The tool first **checks** if the use case exists in the library
+        3. If found in library, it uses the **pre-mapped** MITRE data
+        4. If not found, it **analyzes** the use case using NLP and maps it
+        5. **View** mapped results, analytics, and export options
+        6. **Discover** additional relevant use cases based on your log sources
+        """)
 
 # Results page
 elif st.session_state.page == "results":
-    st.markdown("# 📊 Mapping Results")
+st.markdown("# 📊 Mapping Results")
+
+if st.session_state.mapping_complete and st.session_state.processed_data is not None:
+    df = st.session_state.processed_data
     
-    if st.session_state.mapping_complete and st.session_state.processed_data is not None:
-        df = st.session_state.processed_data
-        
-        st.markdown("### Filtered Results")
-        
-        # Filters
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            if 'Mapped MITRE Tactic(s)' in df.columns:
-                # Handle potential NaN values by filling with N/A first
-                tactics_series = df['Mapped MITRE Tactic(s)'].fillna("N/A")
-                all_tactics = set()
-                for tactic_str in tactics_series:
-                    if isinstance(tactic_str, str):
-                        for tactic in tactic_str.split(', '):
-                            if tactic and tactic != 'N/A':
-                                all_tactics.add(tactic)
-                selected_tactics = st.multiselect("Filter by Tactics", options=sorted(list(all_tactics)), default=[])
-        
-        with col2:
-            search_term = st.text_input("Search in Descriptions", "")
-        
-        with col3:
-            # Add a filter for match source (library or model)
-            if 'Match Source' in df.columns:
-                # Fill NaN values for safe filtering
-                match_sources = df['Match Source'].fillna("Unknown").unique()
-                selected_sources = st.multiselect("Filter by Match Source", options=match_sources, default=[])
-        
-        # Apply filters - safe handling for all filters
-        filtered_df = df.copy()
-        
-        if selected_tactics:
-            # Safe filtering that handles NaN values
-            mask = filtered_df['Mapped MITRE Tactic(s)'].fillna('').apply(
-                lambda x: isinstance(x, str) and any(tactic in x for tactic in selected_tactics)
-            )
-            filtered_df = filtered_df[mask]
-        
-        if search_term:
-            # Safe filtering that handles NaN values
-            mask = filtered_df['Description'].fillna('').astype(str).str.contains(search_term, case=False, na=False)
-            filtered_df = filtered_df[mask]
-        
-        if selected_sources:
-            # Safe filtering that handles NaN values
-            mask = filtered_df['Match Source'].fillna('Unknown').astype(str).apply(
-                lambda x: any(source in x for source in selected_sources)
-            )
-            filtered_df = filtered_df[mask]
-        
-        # Display results
-        st.markdown(f"Showing {len(filtered_df)} of {len(df)} use cases")
-        st.dataframe(filtered_df, use_container_width=True)
-        
-        # Download options
-        st.download_button(
-            "Download Results as CSV",
-            filtered_df.to_csv(index=False).encode('utf-8'),
-            "mitre_mapped_results.csv",
-            "text/csv"
+    st.markdown("### Filtered Results")
+    
+    # Filters
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        if 'Mapped MITRE Tactic(s)' in df.columns:
+            # Handle potential NaN values by filling with N/A first
+            tactics_series = df['Mapped MITRE Tactic(s)'].fillna("N/A")
+            all_tactics = set()
+            for tactic_str in tactics_series:
+                if isinstance(tactic_str, str):
+                    for tactic in tactic_str.split(', '):
+                        if tactic and tactic != 'N/A':
+                            all_tactics.add(tactic)
+            selected_tactics = st.multiselect("Filter by Tactics", options=sorted(list(all_tactics)), default=[])
+    
+    with col2:
+        search_term = st.text_input("Search in Descriptions", "")
+    
+    with col3:
+        # Add a filter for match source (library or model)
+        if 'Match Source' in df.columns:
+            # Fill NaN values for safe filtering
+            match_sources = df['Match Source'].fillna("Unknown").unique()
+            selected_sources = st.multiselect("Filter by Match Source", options=match_sources, default=[])
+    
+    # Apply filters - safe handling for all filters
+    filtered_df = df.copy()
+    
+    if selected_tactics:
+        # Safe filtering that handles NaN values
+        mask = filtered_df['Mapped MITRE Tactic(s)'].fillna('').apply(
+            lambda x: isinstance(x, str) and any(tactic in x for tactic in selected_tactics)
         )
+        filtered_df = filtered_df[mask]
     
-    else:
-        st.info("No mapping results available. Please upload a CSV file on the Home page and complete the mapping process.")
-        
-        # Add a button to navigate back to home
-        if st.button("Go to Home"):
-            st.session_state.page = "home"
-            st.experimental_rerun()
+    if search_term:
+        # Safe filtering that handles NaN values
+        mask = filtered_df['Description'].fillna('').astype(str).str.contains(search_term, case=False, na=False)
+        filtered_df = filtered_df[mask]
+    
+    if selected_sources:
+        # Safe filtering that handles NaN values
+        mask = filtered_df['Match Source'].fillna('Unknown').astype(str).apply(
+            lambda x: any(source in x for source in selected_sources)
+        )
+        filtered_df = filtered_df[mask]
+    
+    # Display results
+    st.markdown(f"Showing {len(filtered_df)} of {len(df)} use cases")
+    st.dataframe(filtered_df, use_container_width=True)
+    
+    # Download options
+    st.download_button(
+        "Download Results as CSV",
+        filtered_df.to_csv(index=False).encode('utf-8'),
+        "mitre_mapped_results.csv",
+        "text/csv"
+    )
+
+else:
+    st.info("No mapping results available. Please upload a CSV file on the Home page and complete the mapping process.")
+    
+    # Add a button to navigate back to home
+    if st.button("Go to Home"):
+        st.session_state.page = "home"
+        st.experimental_rerun()
 
 # Analytics page
-# Analytics page with fixes for both issues
 elif st.session_state.page == "analytics":
-    st.markdown("# 📈 Coverage Analytics")
+st.markdown("# 📈 Coverage Analytics")
+
+if st.session_state.mapping_complete and st.session_state.processed_data is not None:
+    df = st.session_state.processed_data
+    techniques_count = st.session_state.techniques_count
     
-    if st.session_state.mapping_complete and st.session_state.processed_data is not None:
-        df = st.session_state.processed_data
-        techniques_count = st.session_state.techniques_count
+    # Key metrics
+    col1, col2, col3, col4 = st.columns(4)
+    
+    total_techniques = 203  # Total number of MITRE techniques
+    covered_techniques = len(techniques_count.keys())
+    coverage_percent = round((covered_techniques / total_techniques) * 100, 2)
+    
+    # Count library matches vs model matches - handle NaN values safely
+    library_matches = df[df['Match Source'].fillna('Unknown').astype(str).str.contains('library', case=False, na=False)].shape[0]
+    model_matches = df[df['Match Source'].fillna('Unknown').astype(str).str.contains('Model', case=False, na=False)].shape[0]
+    
+    with col1:
+        st.markdown("""
+        <div class="metric-card">
+            <div class="metric-value">{}</div>
+            <div class="metric-label">Security Use Cases</div>
+        </div>
+        """.format(len(df)), unsafe_allow_html=True)
+    
+    with col2:
+        st.markdown("""
+        <div class="metric-card">
+            <div class="metric-value">{}</div>
+            <div class="metric-label">Mapped Techniques</div>
+        </div>
+        """.format(covered_techniques), unsafe_allow_html=True)
+    
+    with col3:
+        st.markdown("""
+        <div class="metric-card">
+            <div class="metric-value">{}%</div>
+            <div class="metric-label">Framework Coverage</div>
+        </div>
+        """.format(coverage_percent), unsafe_allow_html=True)
+    
+    with col4:
+        st.markdown("""
+        <div class="metric-card">
+            <div class="metric-value">{} / {}</div>
+            <div class="metric-label">Library Matches / Model Matches</div>
+        </div>
+        """.format(library_matches, model_matches), unsafe_allow_html=True)
+    
+    # Match source chart
+    st.markdown("### Mapping Source Distribution")
+    
+    # Handle empty or all-NaN columns
+    if not df['Match Source'].isna().all():
+        match_source_counts = df['Match Source'].fillna('Unknown').value_counts().reset_index()
+        match_source_counts.columns = ['Source', 'Count']
         
-        # Key metrics
-        col1, col2, col3, col4 = st.columns(4)
-        
-        total_techniques = 203  # Total number of MITRE techniques
-        covered_techniques = len(techniques_count.keys())
-        coverage_percent = round((covered_techniques / total_techniques) * 100, 2)
-        
-        # Count library matches vs model matches - handle NaN values safely
-        library_matches = df[df['Match Source'].fillna('Unknown').astype(str).str.contains('library', case=False, na=False)].shape[0]
-        model_matches = df[df['Match Source'].fillna('Unknown').astype(str).str.contains('Model', case=False, na=False)].shape[0]
-        
-        with col1:
-            st.markdown("""
-            <div class="metric-card">
-                <div class="metric-value">{}</div>
-                <div class="metric-label">Security Use Cases</div>
-            </div>
-            """.format(len(df)), unsafe_allow_html=True)
-        
-        with col2:
-            st.markdown("""
-            <div class="metric-card">
-                <div class="metric-value">{}</div>
-                <div class="metric-label">Mapped Techniques</div>
-            </div>
-            """.format(covered_techniques), unsafe_allow_html=True)
-        
-        with col3:
-            st.markdown("""
-            <div class="metric-card">
-                <div class="metric-value">{}%</div>
-                <div class="metric-label">Framework Coverage</div>
-            </div>
-            """.format(coverage_percent), unsafe_allow_html=True)
-        
-        with col4:
-            st.markdown("""
-            <div class="metric-card">
-                <div class="metric-value">{} / {}</div>
-                <div class="metric-label">Library Matches / Model Matches</div>
-            </div>
-            """.format(library_matches, model_matches), unsafe_allow_html=True)
-        
-        # Match source chart
-        st.markdown("### Mapping Source Distribution")
-        
-        # Handle empty or all-NaN columns
-        if not df['Match Source'].isna().all():
-            match_source_counts = df['Match Source'].fillna('Unknown').value_counts().reset_index()
-            match_source_counts.columns = ['Source', 'Count']
-            
-            # Create chart only if there's data
-            if not match_source_counts.empty:
-                fig_source = px.pie(
-                    match_source_counts, 
-                    values='Count', 
-                    names='Source',
-                    title="Distribution of Mapping Sources",
-                    hole=0.5,
-                    color_discrete_sequence=px.colors.qualitative.Set3
-                )
-                
-                fig_source.update_layout(
-                    legend=dict(orientation="h", yanchor="bottom", y=-0.2)
-                )
-                st.plotly_chart(fig_source, use_container_width=True)
-            else:
-                st.info("No mapping source data available for visualization.")
-        else:
-            st.info("No mapping source data available for visualization.")
-        
-        # Coverage by Tactic - Doughnut Chart with better color scheme and fixed duplicates
-        st.markdown("### Coverage by Tactic")
-        
-        # Create data for tactic coverage using the fixed function
-        tactic_df = generate_tactic_visualization(df)
-        
-        if not tactic_df.empty:
-            # Create doughnut chart for tactic coverage with better colors
-            fig_tactic = go.Figure(data=[go.Pie(
-                labels=tactic_df['Tactic'],
-                values=tactic_df['Use Cases'],
-                hole=.5,
-                textposition='outside',  # Modified: This ensures all labels are outside
-                textinfo='label+percent',
-                marker=dict(colors=px.colors.qualitative.Dark24)  # Using Dark24 for better contrast
-            )])
-            
-            fig_tactic.update_layout(
-                title="Security Use Cases by MITRE Tactic",
-                showlegend=False,  # Remove legend to prevent overlap
-                margin=dict(t=50, b=50, l=100, r=100)  # Added: Margin for external labels
+        # Create chart only if there's data
+        if not match_source_counts.empty:
+            fig_source = px.pie(
+                match_source_counts, 
+                values='Count', 
+                names='Source',
+                title="Distribution of Mapping Sources",
+                hole=0.5,
+                color_discrete_sequence=px.colors.qualitative.Set3
             )
             
-            st.plotly_chart(fig_tactic, use_container_width=True)
+            fig_source.update_layout(
+                legend=dict(orientation="h", yanchor="bottom", y=-0.2)
+            )
+            st.plotly_chart(fig_source, use_container_width=True)
         else:
-            st.info("No tactic data available for visualization.")
+            st.info("No mapping source data available for visualization.")
+    else:
+        st.info("No mapping source data available for visualization.")
+    
+    # Coverage by Tactic - Doughnut Chart with better color scheme and fixed duplicates
+    st.markdown("### Coverage by Tactic")
+    
+    # Create data for tactic coverage using the fixed function
+    tactic_df = generate_tactic_visualization(df)
+    
+    if not tactic_df.empty:
+        # Create doughnut chart for tactic coverage with better colors
+        fig_tactic = go.Figure(data=[go.Pie(
+            labels=tactic_df['Tactic'],
+            values=tactic_df['Use Cases'],
+            hole=.5,
+            textposition='outside',  # Modified: This ensures all labels are outside
+            textinfo='label+percent',
+            marker=dict(colors=px.colors.qualitative.Dark24)  # Using Dark24 for better contrast
+        )])
         
-        # Coverage by Technique - Doughnut Chart with fixed comma-separated techniques
-        st.markdown("### Coverage by Technique")
+        fig_tactic.update_layout(
+            title="Security Use Cases by MITRE Tactic",
+            showlegend=False,  # Remove legend to prevent overlap
+            margin=dict(t=50, b=50, l=100, r=100)  # Added: Margin for external labels
+        )
         
-        # Process the techniques data first to correctly handle comma-separated techniques
+        st.plotly_chart(fig_tactic, use_container_width=True)
+    else:
+        st.info("No tactic data available for visualization.")
+    
+    # Coverage by Technique - Doughnut Chart with fixed comma-separated techniques
+    st.markdown("### Coverage by Technique")
+    
+    # Process the techniques data first to correctly handle comma-separated techniques
+    if not techniques_count:
         techniques_count = process_techniques_for_analytics(df, mitre_techniques)
-        
-        if techniques_count:
-            # Get technique visualization data using the fixed function
-            technique_df = generate_technique_visualization(techniques_count, mitre_techniques).head(10)
-            
-            # Create doughnut chart for technique coverage with better colors
-            fig_tech = go.Figure(data=[go.Pie(
-                labels=technique_df['Technique'],
-                values=technique_df['Count'],
-                hole=.5,
-                textposition='outside',  # Modified: This ensures all labels are outside
-                textinfo='label+percent',
-                marker=dict(colors=px.colors.qualitative.Bold)  # Using Bold color scheme for better contrast
-            )])
-            
-            fig_tech.update_layout(
-                title="Top 10 MITRE Techniques in Security Use Cases",
-                showlegend=False,  # Remove legend to prevent overlap
-                margin=dict(t=50, b=50, l=100, r=100)  # Added: Margin for external labels
-            )
-            
-            st.plotly_chart(fig_tech, use_container_width=True)
-        else:
-            st.info("No technique data available for visualization.")
     
+    if techniques_count:
+        # Get technique visualization data using the fixed function
+        technique_df = generate_technique_visualization(techniques_count, mitre_techniques).head(10)
+        
+        # Create doughnut chart for technique coverage with better colors
+        fig_tech = go.Figure(data=[go.Pie(
+            labels=technique_df['Technique'],
+            values=technique_df['Count'],
+            hole=.5,
+            textposition='outside',  # Modified: This ensures all labels are outside
+            textinfo='label+percent',
+            marker=dict(colors=px.colors.qualitative.Bold)  # Using Bold color scheme for better contrast
+        )])
+        
+        fig_tech.update_layout(
+            title="Top 10 MITRE Techniques in Security Use Cases",
+            showlegend=False,  # Remove legend to prevent overlap
+            margin=dict(t=50, b=50, l=100, r=100)  # Added: Margin for external labels
+        )
+        
+        st.plotly_chart(fig_tech, use_container_width=True)
     else:
-        st.info("No analytics data available. Please upload a CSV file on the Home page and complete the mapping process.")
-        
-        # Add a button to navigate back to home
-        if st.button("Go to Home"):
-            st.session_state.page = "home"
-            st.experimental_rerun()
-    st.markdown("# 📈 Coverage Analytics")
+        st.info("No technique data available for visualization.")
+
+else:
+    st.info("No analytics data available. Please upload a CSV file on the Home page and complete the mapping process.")
     
-    if st.session_state.mapping_complete and st.session_state.processed_data is not None:
-        df = st.session_state.processed_data
-        techniques_count = st.session_state.techniques_count
-        
-        # Key metrics
-        col1, col2, col3, col4 = st.columns(4)
-        
-        total_techniques = 203  # Total number of MITRE techniques
-        covered_techniques = len(techniques_count.keys())
-        coverage_percent = round((covered_techniques / total_techniques) * 100, 2)
-        
-        # Count library matches vs model matches - handle NaN values safely
-        library_matches = df[df['Match Source'].fillna('Unknown').astype(str).str.contains('library', case=False, na=False)].shape[0]
-        model_matches = df[df['Match Source'].fillna('Unknown').astype(str).str.contains('Model', case=False, na=False)].shape[0]
-        
-        with col1:
-            st.markdown("""
-            <div class="metric-card">
-                <div class="metric-value">{}</div>
-                <div class="metric-label">Security Use Cases</div>
-            </div>
-            """.format(len(df)), unsafe_allow_html=True)
-        
-        with col2:
-            st.markdown("""
-            <div class="metric-card">
-                <div class="metric-value">{}</div>
-                <div class="metric-label">Mapped Techniques</div>
-            </div>
-            """.format(covered_techniques), unsafe_allow_html=True)
-        
-        with col3:
-            st.markdown("""
-            <div class="metric-card">
-                <div class="metric-value">{}%</div>
-                <div class="metric-label">Framework Coverage</div>
-            </div>
-            """.format(coverage_percent), unsafe_allow_html=True)
-        
-        with col4:
-            st.markdown("""
-            <div class="metric-card">
-                <div class="metric-value">{} / {}</div>
-                <div class="metric-label">Library Matches / Model Matches</div>
-            </div>
-            """.format(library_matches, model_matches), unsafe_allow_html=True)
-        
-        # Match source chart
-        st.markdown("### Mapping Source Distribution")
-        
-        # Handle empty or all-NaN columns
-        if not df['Match Source'].isna().all():
-            match_source_counts = df['Match Source'].fillna('Unknown').value_counts().reset_index()
-            match_source_counts.columns = ['Source', 'Count']
-            
-            # Create chart only if there's data
-            if not match_source_counts.empty:
-                fig_source = px.pie(
-                    match_source_counts, 
-                    values='Count', 
-                    names='Source',
-                    title="Distribution of Mapping Sources",
-                    hole=0.5,
-                    color_discrete_sequence=px.colors.qualitative.Set3
-                )
-                
-                fig_source.update_layout(
-                    legend=dict(orientation="h", yanchor="bottom", y=-0.2)
-                )
-                st.plotly_chart(fig_source, use_container_width=True)
-            else:
-                st.info("No mapping source data available for visualization.")
-        else:
-            st.info("No mapping source data available for visualization.")
-        
-        # Coverage by Tactic - Doughnut Chart with better color scheme
-        st.markdown("### Coverage by Tactic")
-        
-        # Create data for tactic coverage
-        tactic_counts = {}
-        for _, row in df.iterrows():
-            tactic_str = row.get('Mapped MITRE Tactic(s)', '')
-            if pd.isna(tactic_str):
-                continue
-                
-            for tactic in str(tactic_str).split(', '):
-                if tactic and tactic != 'N/A':
-                    tactic_counts[tactic] = tactic_counts.get(tactic, 0) + 1
-        
-        # Transform to dataframe for visualization
-        tactic_df = pd.DataFrame({
-            'Tactic': list(tactic_counts.keys()),
-            'Use Cases': list(tactic_counts.values())
-        }).sort_values('Use Cases', ascending=False)
-        
-        if not tactic_df.empty:
-            # Create doughnut chart for tactic coverage with better colors
-            fig_tactic = go.Figure(data=[go.Pie(
-                labels=tactic_df['Tactic'],
-                values=tactic_df['Use Cases'],
-                hole=.5,
-                textposition='outside',textinfo='label+percent',
-                marker=dict(colors=px.colors.qualitative.Dark24)  # Using Dark24 for better contrast
-            )])
-            
-            fig_tactic.update_layout(
-                title="Security Use Cases by MITRE Tactic",
-                showlegend=False,  # Remove legend to prevent overlap
-                margin=dict(t=50, b=50, l=100, r=100)  # Added: Margin for external labels
-            )
-            
-            st.plotly_chart(fig_tactic, use_container_width=True)
-        else:
-            st.info("No tactic data available for visualization.")
-        
-        # Coverage by Technique - Doughnut Chart with better naming
-        st.markdown("### Coverage by Technique")
-        
-        if techniques_count:
-            # Get top techniques for the chart (limiting to top 10 for readability)
-            technique_ids = list(techniques_count.keys())
-            technique_counts = list(techniques_count.values())
-            
-            # Get technique names - with improved formatting
-            technique_names = []
-            for tech_id in technique_ids:
-                # Find the technique name in the mitre_techniques list
-                tech_name = next((t['name'] for t in mitre_techniques if t['id'] == tech_id), tech_id)
-                technique_names.append(tech_name)
-            
-            technique_df = pd.DataFrame({
-                'Technique': technique_names,
-                'Count': technique_counts
-            }).sort_values('Count', ascending=False).head(10)
-            
-            # Create doughnut chart for technique coverage with better colors
-            fig_tech = go.Figure(data=[go.Pie(
-                labels=technique_df['Technique'],
-                values=technique_df['Count'],
-                hole=.5,
-                textposition='outside',  # Modified: This ensures all labels are outside
-                textinfo='label+percent',
-                marker=dict(colors=px.colors.qualitative.Bold)  # Using Bold color scheme for better contrast
-            )])
-            
-            fig_tech.update_layout(
-                title="Top 10 MITRE Techniques in Security Use Cases",
-                showlegend=False,  # Remove legend to prevent overlap
-                margin=dict(t=50, b=50, l=100, r=100)  # Added: Margin for external labels
-            )
-            
-            st.plotly_chart(fig_tech, use_container_width=True)
-        else:
-            st.info("No technique data available for visualization.")
-    
-    else:
-        st.info("No analytics data available. Please upload a CSV file on the Home page and complete the mapping process.")
-        
-        # Add a button to navigate back to home
-        if st.button("Go to Home"):
-            st.session_state.page = "home"
-            st.experimental_rerun()
+    # Add a button to navigate back to home
+    if st.button("Go to Home"):
+        st.session_state.page = "home"
+        st.experimental_rerun()
 
 # Suggestions page
 elif st.session_state.page == "suggestions":
-    render_suggestions_page()
+render_suggestions_page()
 
 # Export page - Removed "Export New Cases for Library" section
 elif st.session_state.page == "export":
-    st.markdown("# 💾 Export Navigator Layer")
+st.markdown("# 💾 Export Navigator Layer")
+
+if st.session_state.mapping_complete and st.session_state.processed_data is not None:
+    df = st.session_state.processed_data
+    st.markdown("### MITRE ATT&CK Navigator Export")
     
-    if st.session_state.mapping_complete and st.session_state.processed_data is not None:
-        df = st.session_state.processed_data
-        st.markdown("### MITRE ATT&CK Navigator Export")
-        
-        navigator_layer, layer_id = create_navigator_layer(st.session_state.techniques_count)
-        
-        st.markdown("""
-        The MITRE ATT&CK Navigator is an interactive visualization tool for exploring the MITRE ATT&CK framework.
-        
-        You can export your mapping results as a layer file to visualize in the Navigator.
-        """)
-        
-        st.download_button(
-            label="Download Navigator Layer JSON",
-            data=navigator_layer,
-            file_name="navigator_layer.json",
-            mime="application/json",
-            key="download_nav"
-        )
-        
-        st.markdown("### How to Use in MITRE ATT&CK Navigator")
-        
-        st.markdown("""
-        1. Download the Navigator Layer JSON using the button above
-        2. Visit the [MITRE ATT&CK Navigator](https://mitre-attack.github.io/attack-navigator/)
-        3. Click "Open Existing Layer" and then "Upload from Local"
-        4. Select the downloaded `navigator_layer.json` file
-        """)
-        
-        with st.expander("View Navigator Layer JSON"):
-            st.code(navigator_layer, language="json")
-    
+    # Process techniques with the improved function
+    if not st.session_state.techniques_count:
+        techniques_count = process_techniques_for_analytics(df, mitre_techniques)
+        st.session_state.techniques_count = techniques_count
     else:
-        st.info("No export data available. Please upload a CSV file on the Home page and complete the mapping process.")
-        
-        # Add a button to navigate back to home
-        if st.button("Go to Home"):
-            st.session_state.page = "home"
-            st.experimental_rerun()
+        techniques_count = st.session_state.techniques_count
+    
+    navigator_layer, layer_id = create_navigator_layer(techniques_count)
+    
+    st.markdown("""
+    The MITRE ATT&CK Navigator is an interactive visualization tool for exploring the MITRE ATT&CK framework.
+    
+    You can export your mapping results as a layer file to visualize in the Navigator.
+    """)
+    
+    st.download_button(
+        label="Download Navigator Layer JSON",
+        data=navigator_layer,
+        file_name="navigator_layer.json",
+        mime="application/json",
+        key="download_nav"
+    )
+    
+    st.markdown("### How to Use in MITRE ATT&CK Navigator")
+    
+    st.markdown("""
+    1. Download the Navigator Layer JSON using the button above
+    2. Visit the [MITRE ATT&CK Navigator](https://mitre-attack.github.io/attack-navigator/)
+    3. Click "Open Existing Layer" and then "Upload from Local"
+    4. Select the downloaded `navigator_layer.json` file
+    """)
+    
+    with st.expander("View Navigator Layer JSON"):
+        st.code(navigator_layer, language="json")
+
+else:
+    st.info("No export data available. Please upload a CSV file on the Home page and complete the mapping process.")
+    
+    # Add a button to navigate back to home
+    if st.button("Go to Home"):
+        st.session_state.page = "home"
+        st.experimental_rerun()
 
 if __name__ == '__main__':
-    pass  # Main app flow is handled through the Streamlit pages
+pass  # Main app flow is handled through the Streamlit pages
