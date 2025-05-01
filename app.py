@@ -446,7 +446,7 @@ def get_mitre_embeddings(_model, techniques):
         embeddings = torch.cat(all_embeddings, dim=0)
         
         return embeddings
-        except Exception as e:
+    except Exception as e:
         st.error(f"Error computing embeddings: {e}")
         return None
 
