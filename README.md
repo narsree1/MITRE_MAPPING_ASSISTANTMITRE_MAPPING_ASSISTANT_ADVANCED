@@ -69,16 +69,10 @@ mitre-mapping-tool/
 ├── app.py                   # Main application logic
 ├── requirements.txt         # Python dependencies
 ├── README.md                # Project documentation
-│
+├── library.csv              # Pre-mapped security use cases
 ├── analytics.py             # Renders analytics page
-├── modules/                 # Optional modular structure (if refactored)
-│   ├── mapper.py            # Core logic for MITRE mapping
-│   ├── suggestions.py       # Logic to suggest related use cases
-│   ├── utils.py             # Helper functions (e.g. Lottie, caching)
-│
-├── assets/                  # Static assets like animations or logos
-│   └── mitre_cache.json     # Local MITRE ATT&CK JSON (optional fallback)
-```
+├── suggestions.py           # Standalone suggestions 
+
 
 ## License
 
